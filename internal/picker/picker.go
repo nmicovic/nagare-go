@@ -397,19 +397,21 @@ func (m Model) renderListView(width, height int) string {
 			name = string(runes[:maxName]) + "..."
 		}
 
-		nameStyled := lipgloss.NewStyle().Foreground(c.Foreground).Render(name)
-		content := fmt.Sprintf(" %s %s %s", dot, nameStyled, badge)
-
 		var line string
 		if i == m.cursor {
+			// Selected: single style for entire line — no inner Render() calls
+			// to avoid ANSI resets killing the background
+			agentChar := string(models.AgentLabel(s.AgentType)[0])
 			line = lipgloss.NewStyle().
 				Background(c.Primary).
 				Foreground(c.Background).
 				Bold(true).
 				PaddingLeft(1).
 				Width(width).
-				Render("> " + content[1:])
+				Render(fmt.Sprintf("> ● %s  %s", name, agentChar))
 		} else {
+			nameStyled := lipgloss.NewStyle().Foreground(c.Foreground).Render(name)
+			content := fmt.Sprintf(" %s %s %s", dot, nameStyled, badge)
 			line = lipgloss.NewStyle().
 				Background(c.Background).
 				Foreground(c.Foreground).

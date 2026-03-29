@@ -8,15 +8,20 @@ import (
 
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/hooks"
+	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/picker"
 	"github.com/nemke/nagare-go/internal/setup"
 	"github.com/nemke/nagare-go/internal/theme"
 )
 
 func main() {
+	log.Init()
+	defer log.Close()
+
 	// Load theme from config
 	cfg, _ := config.Load()
 	theme.Set(cfg.Appearance.Theme)
+	log.Info("starting nagare-go, theme=%s", cfg.Appearance.Theme)
 
 	rootCmd := &cobra.Command{
 		Use:   "nagare-go",

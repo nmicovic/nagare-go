@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/sahilm/fuzzy"
 	"github.com/nemke/nagare-go/internal/state"
@@ -87,6 +88,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionsUpdatedMsg:
 		m.sessions = []models.Session(msg)
+		log.Debug("scan: %d sessions", len(m.sessions))
 		m.applyFilter()
 		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
 
@@ -125,6 +127,7 @@ func (m Model) View() string {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	log.Debug("key: %q type=%d", key, msg.Type)
 
 	switch key {
 	case keyEscape:
@@ -156,7 +159,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyCycleTheme:
-		theme.CycleNext()
+		next := theme.CycleNext()
+		log.Info("theme switched to %s", next)
 		return m, nil
 	case keyApprove:
 		if len(m.filtered) > 0 {

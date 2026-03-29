@@ -112,8 +112,8 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	// Split terminal: 40% left, 60% right
-	leftOuter := m.width * 2 / 5
+	// Split terminal: 20% left, 80% right
+	leftOuter := m.width / 5
 	rightOuter := m.width - leftOuter
 
 	left := m.viewLeft(leftOuter, m.height)

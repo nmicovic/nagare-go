@@ -114,6 +114,10 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	if m.viewMode == GridView {
+		return m.viewGrid(m.width, m.height)
+	}
+
 	leftOuter := m.width / 5
 	rightOuter := m.width - leftOuter
 
@@ -140,22 +144,42 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case keyUp:
-		if m.cursor > 0 {
+		if m.viewMode == GridView {
+			cols := gridColumns(len(m.filtered))
+			if m.cursor-cols >= 0 {
+				m.cursor -= cols
+			}
+		} else if m.cursor > 0 {
 			m.cursor--
-			return m, m.doPreview()
 		}
-		return m, nil
+		return m, m.doPreview()
 	case keyDown:
-		if m.cursor < len(m.filtered)-1 {
+		if m.viewMode == GridView {
+			cols := gridColumns(len(m.filtered))
+			if m.cursor+cols < len(m.filtered) {
+				m.cursor += cols
+			}
+		} else if m.cursor < len(m.filtered)-1 {
 			m.cursor++
-			return m, m.doPreview()
 		}
-		return m, nil
+		return m, m.doPreview()
+	case "left":
+		if m.viewMode == GridView && m.cursor > 0 {
+			m.cursor--
+		}
+		return m, m.doPreview()
+	case "right":
+		if m.viewMode == GridView && m.cursor < len(m.filtered)-1 {
+			m.cursor++
+		}
+		return m, m.doPreview()
 	case keyToggleView:
 		if m.viewMode == ListView {
 			m.viewMode = GridView
+			log.Info("switched to grid view")
 		} else {
 			m.viewMode = ListView
+			log.Info("switched to list view")
 		}
 		return m, nil
 	case keyCycleTheme:
@@ -509,6 +533,125 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		Render(previewContent)
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
+}
+
+// --- Grid view ---
+
+func gridColumns(count int) int {
+	if count <= 2 {
+		return 1
+	}
+	if count <= 4 {
+		return 2
+	}
+	return 3
+}
+
+func (m Model) viewGrid(totalWidth, totalHeight int) string {
+	c := theme.Current().Colors
+
+	if len(m.filtered) == 0 {
+		return panelStyle().
+			Width(totalWidth).
+			Height(totalHeight).
+			Render(mutedStyle().Render("No sessions found"))
+	}
+
+	// Search bar at top
+	searchBar := m.searchInput.View()
+
+	cols := gridColumns(len(m.filtered))
+	cellWidth := totalWidth / cols
+	cellHeight := totalHeight - 2 // subtract search bar height
+	if cols > 1 {
+		cellHeight = cellHeight / ((len(m.filtered) + cols - 1) / cols)
+	}
+	if cellHeight < 8 {
+		cellHeight = 8
+	}
+
+	// Build rows of cells
+	var rows []string
+	for i := 0; i < len(m.filtered); i += cols {
+		var cells []string
+		for j := 0; j < cols && i+j < len(m.filtered); j++ {
+			idx := i + j
+			s := m.filtered[idx]
+
+			// Header: status dot + name + agent badge
+			dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
+			statusLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render(models.StatusLabel(s.Status))
+			agentBadge := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
+				Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
+				Padding(0, 1).
+				Render(models.AgentLabel(s.AgentType))
+
+			header := fmt.Sprintf(" %s %s %s  %s", dot, s.Name, agentBadge, statusLabel)
+
+			// Meta line: path + git branch
+			meta := mutedStyle().Render(fmt.Sprintf("   %s", s.Path))
+			if s.Details.GitBranch != "" {
+				meta += mutedStyle().Render(fmt.Sprintf("  (%s)", s.Details.GitBranch))
+			}
+
+			// Preview: capture pane content for this session
+			innerWidth := cellWidth - 6 // borders + padding
+			previewHeight := cellHeight - 6
+			if previewHeight < 1 {
+				previewHeight = 1
+			}
+
+			preview := m.getGridPreview(s, innerWidth, previewHeight)
+
+			content := header + "\n" + meta + "\n\n" + preview
+
+			// Border color: bright for selected, muted for others
+			borderColor := c.Border
+			if idx == m.cursor {
+				borderColor = c.Primary
+			}
+
+			cell := lipgloss.NewStyle().
+				Background(c.Background).
+				Foreground(c.Foreground).
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(borderColor).
+				BorderBackground(c.Background).
+				Width(cellWidth).
+				Height(cellHeight).
+				Padding(1).
+				Render(content)
+
+			cells = append(cells, cell)
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
+	}
+
+	grid := strings.Join(rows, "\n")
+	return searchBar + "\n" + grid
+}
+
+func (m Model) getGridPreview(s models.Session, width, height int) string {
+	content := CapturePreview(s.Name, s.WindowIndex, s.PaneIndex)
+	if content == "" {
+		return mutedStyle().Render("No preview")
+	}
+
+	lines := strings.Split(content, "\n")
+	// Trim leading blank lines
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, line := range lines {
+		if ansi.StringWidth(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // formatTimeAgo converts an ISO 8601 timestamp to a human-readable relative time.

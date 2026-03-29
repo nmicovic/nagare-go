@@ -20,6 +20,7 @@ type Model struct {
 	focus           int // 0=path, 1=name, 2=agent, 3=continue
 	suggestions     []string
 	sugCursor       int
+	lastPathValue   string // cached to avoid redundant ListDirectories
 	width           int
 	height          int
 	done            bool
@@ -111,6 +112,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.agent = cycleAgent(agents, m.agent, -1)
 			return m, nil
 		}
+		if m.focus == 3 {
+			m.continueSession = !m.continueSession
+			return m, nil
+		}
 	case "right":
 		if m.focus == 2 {
 			m.agent = cycleAgent(agents, m.agent, 1)
@@ -127,8 +132,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.focus {
 	case 0:
 		m.pathInput, cmd = m.pathInput.Update(msg)
-		m.suggestions = session.ListDirectories(m.pathInput.Value(), 5)
-		m.sugCursor = 0
+		if v := m.pathInput.Value(); v != m.lastPathValue {
+			m.lastPathValue = v
+			m.suggestions = session.ListDirectories(v, 5)
+			m.sugCursor = 0
+		}
 	case 1:
 		m.nameInput, cmd = m.nameInput.Update(msg)
 	}
@@ -175,11 +183,7 @@ func (m Model) View() string {
 	}
 
 	c := theme.Current().Colors
-
-	title := lipgloss.NewStyle().
-		Foreground(c.Primary).
-		Bold(true).
-		Render("New Session")
+	title := renderTitle("New Session")
 
 	// Path field
 	pathField := "  Path:  " + m.pathInput.View()
@@ -238,23 +242,5 @@ func (m Model) View() string {
 		hint,
 	}, "\n")
 
-	box := lipgloss.NewStyle().
-		Background(c.Background).
-		Foreground(c.Foreground).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Border).
-		Padding(1, 2).
-		Render(title + "\n" + content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
-}
-
-// Result returns the created session name.
-func (m Model) Result() string {
-	return m.result
-}
-
-// Done returns true if the form was submitted successfully.
-func (m Model) Done() bool {
-	return m.done
+	return renderCenteredBox(title, content, m.width, m.height)
 }

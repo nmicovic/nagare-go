@@ -5,9 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/nemke/nagare-go/internal/session"
-	"github.com/nemke/nagare-go/internal/theme"
 )
 
 // QuickModel is the quick prototype form (name + agent only).
@@ -119,47 +117,18 @@ func (m QuickModel) View() string {
 		return "Loading..."
 	}
 
-	c := theme.Current().Colors
-
-	title := lipgloss.NewStyle().
-		Foreground(c.Primary).
-		Bold(true).
-		Render("Quick Prototype")
-
-	// Name field
+	title := renderTitle("Quick Prototype")
 	nameField := "  Name:  " + m.nameInput.View()
-
-	agentStr := renderAgentPicker(quickAgents, m.agent, m.focus == 1)
-	hint := renderHint("Enter: Create  Tab: Next  Esc: Cancel")
-	errStr := renderError(m.err)
 
 	content := strings.Join([]string{
 		"",
 		nameField,
 		"",
-		agentStr,
+		renderAgentPicker(quickAgents, m.agent, m.focus == 1),
 		"",
-		errStr,
-		hint,
+		renderError(m.err),
+		renderHint("Enter: Create  Tab: Next  Esc: Cancel"),
 	}, "\n")
 
-	box := lipgloss.NewStyle().
-		Background(c.Background).
-		Foreground(c.Foreground).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Border).
-		Padding(1, 2).
-		Render(title + "\n" + content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
-}
-
-// Result returns the created session name.
-func (m QuickModel) Result() string {
-	return m.result
-}
-
-// Done returns true if the form was submitted successfully.
-func (m QuickModel) Done() bool {
-	return m.done
+	return renderCenteredBox(title, content, m.width, m.height)
 }

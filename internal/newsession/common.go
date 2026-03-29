@@ -58,3 +58,22 @@ func renderHint(text string) string {
 		Foreground(theme.Current().Colors.Muted).
 		Render("  " + text)
 }
+
+func renderTitle(text string) string {
+	return lipgloss.NewStyle().
+		Foreground(theme.Current().Colors.Primary).
+		Bold(true).
+		Render(text)
+}
+
+func renderCenteredBox(title, content string, width, height int) string {
+	c := theme.Current().Colors
+	box := lipgloss.NewStyle().
+		Background(c.Background).
+		Foreground(c.Foreground).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(c.Border).
+		Padding(1, 2).
+		Render(title + "\n" + content)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}

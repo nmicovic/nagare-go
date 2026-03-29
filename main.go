@@ -50,14 +50,14 @@ func main() {
 				}
 
 				switch pickerModel.Result().Action {
-				case "new":
+				case picker.ActionNew:
 					form := tea.NewProgram(newsession.New(), tea.WithAltScreen())
 					if _, err := form.Run(); err != nil {
 						return err
 					}
 					// Loop back to picker after form closes
 					continue
-				case "quickproto":
+				case picker.ActionQuickProto:
 					form := tea.NewProgram(newsession.NewQuick(), tea.WithAltScreen())
 					if _, err := form.Run(); err != nil {
 						return err

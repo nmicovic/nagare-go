@@ -46,10 +46,17 @@ type tickScanMsg struct{}
 type tickPreviewMsg struct{}
 type gridPreviewsMsg map[string]string
 
+// Picker exit actions.
+const (
+	ActionNone       = ""
+	ActionNew        = "new"
+	ActionQuickProto = "quickproto"
+)
+
 // Result is returned when the picker exits with a special action.
 type Result struct {
-	Action string // "jump", "new", "quickproto", ""
-	Target string // session name for jump
+	Action string
+	Target string
 }
 
 // Model is the main Bubble Tea model for the picker TUI.
@@ -354,10 +361,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyNewSession:
-		m.result = Result{Action: "new"}
+		m.result = Result{Action: ActionNew}
 		return m, tea.Quit
 	case keyQuickProto:
-		m.result = Result{Action: "quickproto"}
+		m.result = Result{Action: ActionQuickProto}
 		return m, tea.Quit
 	default:
 		// All other keys go to search input

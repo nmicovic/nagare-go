@@ -1,10 +1,13 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+
+	"github.com/nemke/nagare-go/internal/hooks"
+	"github.com/nemke/nagare-go/internal/picker"
 )
 
 func main() {
@@ -16,8 +19,10 @@ func main() {
 	pickCmd := &cobra.Command{
 		Use:   "pick",
 		Short: "Launch session picker TUI",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("picker: not implemented yet")
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := tea.NewProgram(picker.New(), tea.WithAltScreen())
+			_, err := p.Run()
+			return err
 		},
 	}
 
@@ -25,7 +30,7 @@ func main() {
 		Use:   "hook-state",
 		Short: "Handle Claude Code hook events from stdin",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("hook-state: not implemented yet")
+			hooks.Handle()
 		},
 	}
 
@@ -33,7 +38,7 @@ func main() {
 		Use:   "setup",
 		Short: "Install hooks to ~/.claude/settings.json",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("setup: not implemented yet")
+			println("setup: not implemented yet")
 		},
 	}
 

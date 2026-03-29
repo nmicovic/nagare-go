@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -13,4 +14,9 @@ func RunTmux(args ...string) string {
 		return ""
 	}
 	return strings.TrimRight(string(out), "\n")
+}
+
+// PaneTarget formats a tmux pane target string (e.g., "session:0.1").
+func PaneTarget(sessionName string, windowIndex, paneIndex int) string {
+	return fmt.Sprintf("%s:%d.%d", sessionName, windowIndex, paneIndex)
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/notifications"
 	"github.com/nemke/nagare-go/internal/state"
+	"github.com/nemke/nagare-go/internal/tmux"
 )
 
 // HookEvent is the JSON structure received from Claude Code hooks via stdin.
@@ -80,9 +80,8 @@ func Handle() {
 	now := time.Now().UTC().Format(time.RFC3339)
 	statesDir := state.DefaultStatesDir()
 
-	// Load previous state
-	prevStates := state.LoadAllStates(statesDir)
-	prevState, hasPrev := prevStates[event.Cwd]
+	// Load previous state for this session only
+	prevState, hasPrev := state.LoadStateByID(statesDir, event.SessionID)
 
 	// Write new state
 	newSessionState := models.SessionState{
@@ -131,40 +130,33 @@ func Handle() {
 		eventCfg = cfg.Notifications.TaskComplete
 	}
 
-	// Resolve session name from tmux
+	// Resolve session name and build message once
 	sessionName := resolveSessionName(event.Cwd)
+	message := notifications.BuildToastMessage(sessionName, eventType, event.NotificationType)
 
-	notifications.Deliver(
-		sessionName,
-		eventType,
-		event.NotificationType,
-		eventCfg.Toast,
-		eventCfg.Bell,
-		eventCfg.OsNotify,
-		cfg.NotificationDuration,
-	)
+	notifications.Deliver(message, eventCfg.Toast, eventCfg.Bell, eventCfg.OsNotify, cfg.NotificationDuration)
 
 	// Store notification
 	store := notifications.NewStore(notifications.DefaultStorePath())
-	message := notifications.BuildToastMessage(sessionName, eventType, event.NotificationType)
 	store.Add(sessionName, message)
 }
 
 // resolveSessionName finds the tmux session name for a working directory.
 func resolveSessionName(cwd string) string {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}:#{session_path}").Output()
-	if err != nil {
-		if idx := strings.LastIndex(cwd, "/"); idx >= 0 {
-			return cwd[idx+1:]
-		}
-		return cwd
+	raw := tmux.RunTmux("list-sessions", "-F", "#{session_name}:#{session_path}")
+	if raw == "" {
+		return fallbackName(cwd)
 	}
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for _, line := range strings.Split(raw, "\n") {
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) == 2 && parts[1] == cwd {
 			return parts[0]
 		}
 	}
+	return fallbackName(cwd)
+}
+
+func fallbackName(cwd string) string {
 	if idx := strings.LastIndex(cwd, "/"); idx >= 0 {
 		return cwd[idx+1:]
 	}

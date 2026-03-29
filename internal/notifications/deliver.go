@@ -36,7 +36,7 @@ func SendToast(message string, durationMs int) {
 
 // SendBell sends a terminal bell character.
 func SendBell() {
-	exec.Command("tmux", "run-shell", `printf '\a'`).Run()
+	tmux.RunTmux("run-shell", `printf '\a'`)
 }
 
 // DetectOsNotifyCmd returns the best available OS notification command, or nil.
@@ -65,10 +65,8 @@ func SendOsNotify(title, message string) {
 	exec.Command(args[0], args[1:]...).Start()
 }
 
-// Deliver dispatches notifications based on config flags.
-func Deliver(sessionName, eventType, notificationType string, toast, bell, osNotify bool, durationMs int) {
-	message := BuildToastMessage(sessionName, eventType, notificationType)
-
+// Deliver dispatches a pre-built message through the enabled channels.
+func Deliver(message string, toast, bell, osNotify bool, durationMs int) {
 	if toast {
 		SendToast(message, durationMs)
 	}

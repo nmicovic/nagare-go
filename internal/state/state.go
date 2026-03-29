@@ -64,6 +64,20 @@ func LoadAllStates(dir string) map[string]models.SessionState {
 	return states
 }
 
+// LoadStateByID loads a single state file by session ID. Returns zero value and false if not found.
+func LoadStateByID(dir, sessionID string) (models.SessionState, bool) {
+	path := filepath.Join(dir, sessionID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return models.SessionState{}, false
+	}
+	var s models.SessionState
+	if err := json.Unmarshal(data, &s); err != nil {
+		return models.SessionState{}, false
+	}
+	return s, true
+}
+
 // WriteState writes a session state to dir/{session_id}.json.
 func WriteState(dir string, s models.SessionState) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {

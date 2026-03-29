@@ -53,7 +53,9 @@ func (s *Store) save() {
 	os.WriteFile(s.path, data, 0644)
 }
 
-// Add appends a new notification.
+const maxNotifications = 200
+
+// Add appends a new notification, trimming old entries beyond the cap.
 func (s *Store) Add(sessionName, message string) {
 	s.notifications = append(s.notifications, Notification{
 		ID:          uuid.New().String(),
@@ -62,6 +64,9 @@ func (s *Store) Add(sessionName, message string) {
 		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		Read:        false,
 	})
+	if len(s.notifications) > maxNotifications {
+		s.notifications = s.notifications[len(s.notifications)-maxNotifications:]
+	}
 	s.save()
 }
 

@@ -179,14 +179,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyApprove:
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
-			target := fmt.Sprintf("%s:%d.%d", s.Name, s.WindowIndex, s.PaneIndex)
-			tmux.RunTmux("send-keys", "-t", target, "y", "Enter")
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "y", "Enter")
 		}
 	case keyApproveAlways:
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
-			target := fmt.Sprintf("%s:%d.%d", s.Name, s.WindowIndex, s.PaneIndex)
-			tmux.RunTmux("send-keys", "-t", target, "a", "Enter")
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "a", "Enter")
 		}
 	case keyInlinePrompt:
 		// Placeholder for inline prompt feature.

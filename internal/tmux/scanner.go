@@ -154,10 +154,9 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 				}
 				lastMessage = hookState.LastMessage
 			} else {
-				paneContent := RunTmux("capture-pane", "-t",
-					fmt.Sprintf("%s:%d.%d", sess.Name, pane.WindowIndex, pane.PaneIndex), "-p")
-				details = ParseDetails(paneContent)
-				status = DetectStatus(paneContent)
+				// Without hook state, default to Idle. The picker captures
+				// pane content separately for the selected session's preview.
+				status = models.StatusIdle
 			}
 
 			result = append(result, models.Session{

@@ -157,6 +157,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		case keyUp, keyK:
+			if m.cursor > 0 {
+				m.cursor--
+				return m, m.doPreview()
+			}
+			return m, nil
+		case keyDown, keyJ:
+			if m.cursor < len(m.filtered)-1 {
+				m.cursor++
+				return m, m.doPreview()
+			}
+			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)

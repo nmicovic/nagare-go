@@ -8,6 +8,6 @@ const (
 	keyEscape        = "esc"
 	keyApprove       = "ctrl+y"
 	keyApproveAlways = "ctrl+a"
-	keyToggleView    = "tab"
+	keyToggleView    = "Tab"
 	keyCycleTheme    = "ctrl+t"
 )

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nemke/nagare-go/internal/fsutil"
 	"github.com/nemke/nagare-go/internal/models"
 )
 
@@ -90,14 +91,5 @@ func WriteState(dir string, s models.SessionState) error {
 	}
 
 	path := filepath.Join(dir, s.SessionID+".json")
-	return atomicWrite(path, data, 0644)
-}
-
-// atomicWrite writes data to a temp file and renames it into place.
-func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsutil.AtomicWrite(path, data, 0644)
 }

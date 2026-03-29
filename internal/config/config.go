@@ -129,7 +129,7 @@ func LoadFrom(path string) (NagareConfig, error) {
 		}
 	}
 	if _, ok := raw["picker"]; ok {
-		cfg.Picker = parsed.Picker
+		cfg.Picker = mergePicker(cfg.Picker, parsed.Picker, raw["picker"])
 	}
 	if _, ok := raw["appearance"]; ok {
 		cfg.Appearance = mergeAppearance(cfg.Appearance, parsed.Appearance, raw["appearance"])
@@ -165,6 +165,28 @@ func mergeEventConfig(defaults, parsed NotificationEventConfig, rawVal interface
 	}
 	if _, ok := m["min_working_seconds"]; ok {
 		result.MinWorkingSeconds = parsed.MinWorkingSeconds
+	}
+	return result
+}
+
+// mergePicker merges only specified picker fields.
+func mergePicker(defaults, parsed PickerConfig, rawVal interface{}) PickerConfig {
+	m, ok := rawVal.(map[string]interface{})
+	if !ok {
+		return defaults
+	}
+	result := defaults
+	if _, ok := m["quick_project_path"]; ok {
+		result.QuickProjectPath = parsed.QuickProjectPath
+	}
+	if _, ok := m["popup_width"]; ok {
+		result.PopupWidth = parsed.PopupWidth
+	}
+	if _, ok := m["popup_height"]; ok {
+		result.PopupHeight = parsed.PopupHeight
+	}
+	if _, ok := m["grid_refresh_interval"]; ok {
+		result.GridRefreshInterval = parsed.GridRefreshInterval
 	}
 	return result
 }

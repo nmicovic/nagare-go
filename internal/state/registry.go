@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nemke/nagare-go/internal/fsutil"
 )
 
 // RegisteredSession is a session tracked in the registry.
@@ -52,7 +54,7 @@ func (r *Registry) save() error {
 	if err := os.MkdirAll(filepath.Dir(r.path), 0755); err != nil {
 		return err
 	}
-	return atomicWrite(r.path, data, 0644)
+	return fsutil.AtomicWrite(r.path, data, 0644)
 }
 
 // ListAll returns all registered sessions.

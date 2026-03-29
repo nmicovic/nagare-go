@@ -5,10 +5,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/tmux"
@@ -354,8 +356,9 @@ func (m Model) renderListView(width, height int) string {
 		if maxName < 5 {
 			maxName = 5
 		}
-		if len(name) > maxName {
-			name = name[:maxName] + "..."
+		if utf8.RuneCountInString(name) > maxName {
+			runes := []rune(name)
+			name = string(runes[:maxName]) + "..."
 		}
 
 		line := fmt.Sprintf(" %s %s  %s", statusDot, name, agentBadge)
@@ -390,8 +393,10 @@ func (m Model) renderGridView(width, height int) string {
 			s := m.filtered[idx]
 			statusDot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
 			name := s.Name
-			if len(name) > cellWidth-6 {
-				name = name[:cellWidth-6] + ".."
+			maxLen := cellWidth - 6
+			if utf8.RuneCountInString(name) > maxLen {
+				runes := []rune(name)
+				name = string(runes[:maxLen]) + ".."
 			}
 			cell := fmt.Sprintf(" %s %s", statusDot, name)
 			if idx == m.cursor {
@@ -474,8 +479,8 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 			lines = lines[len(lines)-maxLines:]
 		}
 		for i, line := range lines {
-			if runeLen(line) > innerWidth {
-				lines[i] = truncateLine(line, innerWidth)
+			if ansi.StringWidth(line) > innerWidth {
+				lines[i] = ansi.Truncate(line, innerWidth, "")
 			}
 		}
 		previewContent = strings.Join(lines, "\n")
@@ -487,51 +492,4 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		Render(previewContent)
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
-}
-
-// truncateLine truncates a string to maxWidth runes, stripping ANSI sequences from width count.
-func truncateLine(s string, maxWidth int) string {
-	width := 0
-	inEscape := false
-	result := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\x1b' {
-			inEscape = true
-			result = append(result, s[i])
-			continue
-		}
-		if inEscape {
-			result = append(result, s[i])
-			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
-				inEscape = false
-			}
-			continue
-		}
-		if width >= maxWidth {
-			break
-		}
-		result = append(result, s[i])
-		width++
-	}
-	return string(result)
-}
-
-// runeLen returns the visible width of a string, ignoring ANSI escape sequences.
-func runeLen(s string) int {
-	width := 0
-	inEscape := false
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
-				inEscape = false
-			}
-			continue
-		}
-		width++
-	}
-	return width
 }

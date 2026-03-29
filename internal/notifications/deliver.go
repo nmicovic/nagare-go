@@ -39,50 +39,24 @@ func SendBell() {
 	tmux.RunTmux("run-shell", `printf '\a'`)
 }
 
-// DetectOsNotifyCmd returns the best available OS notification command, or nil.
-func DetectOsNotifyCmd() []string {
-	// WSL
-	if os.Getenv("WSL_DISTRO_NAME") != "" {
-		if path, err := exec.LookPath("wsl-notify-send"); err == nil {
-			return []string{path}
-		}
-		return nil
-	}
-
-	// Linux
-	if path, err := exec.LookPath("notify-send"); err == nil {
-		return []string{path}
-	}
-
-	// macOS
-	if path, err := exec.LookPath("osascript"); err == nil {
-		return []string{path, "-e"}
-	}
-
-	return nil
-}
-
-// SendOsNotify sends a native OS notification.
-func sendOsNotifyArgs(title, message string) (string, []string) {
-	cmd := DetectOsNotifyCmd()
-	if cmd == nil {
-		return "", nil
-	}
-	// osascript needs a different invocation
-	if strings.Contains(cmd[0], "osascript") {
-		script := fmt.Sprintf(`display notification "%s" with title "%s"`, message, title)
-		return cmd[0], []string{"-e", script}
-	}
-	return cmd[0], []string{title, message}
-}
-
 // SendOsNotify sends a native OS notification.
 func SendOsNotify(title, message string) {
-	bin, args := sendOsNotifyArgs(title, message)
-	if bin == "" {
+	if os.Getenv("WSL_DISTRO_NAME") != "" {
+		if path, err := exec.LookPath("wsl-notify-send"); err == nil {
+			exec.Command(path, title, message).Start()
+		}
 		return
 	}
-	exec.Command(bin, args...).Start()
+
+	if path, err := exec.LookPath("notify-send"); err == nil {
+		exec.Command(path, title, message).Start()
+		return
+	}
+
+	if path, err := exec.LookPath("osascript"); err == nil {
+		script := fmt.Sprintf(`display notification "%s" with title "%s"`, message, title)
+		exec.Command(path, "-e", script).Start()
+	}
 }
 
 // Deliver dispatches a pre-built message through the enabled channels.

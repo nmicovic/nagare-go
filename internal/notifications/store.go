@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nemke/nagare-go/internal/fsutil"
 )
 
 // Notification is a stored notification entry.
@@ -55,11 +56,7 @@ func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return fsutil.AtomicWrite(s.path, data, 0644)
 }
 
 const maxNotifications = 200

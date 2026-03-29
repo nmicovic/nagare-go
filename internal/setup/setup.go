@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nemke/nagare-go/internal/bin"
 )
 
 var hookEvents = []string{
@@ -53,8 +54,8 @@ func installClaudeHooks(home string) error {
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 
 	// Find our binary
-	bin := findBinary()
-	hookCmd := bin + " hook-state"
+	nagareBin := bin.FindSelf()
+	hookCmd := nagareBin + " hook-state"
 
 	// Load existing settings
 	settings, err := loadJSON(settingsPath)
@@ -119,19 +120,6 @@ func installClaudeHooks(home string) error {
 	fmt.Printf("  Command: %s\n", hookCmd)
 	fmt.Printf("  Events: %s, Notification\n", strings.Join(hookEvents, ", "))
 	return nil
-}
-
-// findBinary locates the nagare-go binary path.
-func findBinary() string {
-	// Try to find in PATH
-	if path, err := exec.LookPath("nagare-go"); err == nil {
-		return path
-	}
-	// Try the binary next to the running executable
-	if exe, err := os.Executable(); err == nil {
-		return exe
-	}
-	return "nagare-go"
 }
 
 // loadJSON reads a JSON file into a map.

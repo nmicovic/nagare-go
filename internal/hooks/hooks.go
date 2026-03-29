@@ -140,6 +140,11 @@ func Handle() {
 
 	notifications.Deliver(message, eventCfg.Toast, eventCfg.Bell, eventCfg.OsNotify, cfg.NotificationDuration)
 
+	// Send popup if enabled
+	if eventCfg.Popup {
+		notifications.SendPopup(sessionName, eventType, message, workingSeconds, eventCfg.PopupTimeout)
+	}
+
 	// Store notification
 	store := notifications.NewStore(notifications.DefaultStorePath())
 	store.Add(sessionName, message)

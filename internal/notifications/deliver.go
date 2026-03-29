@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/nemke/nagare-go/internal/bin"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
 
@@ -70,4 +71,27 @@ func Deliver(message string, toast, bell, osNotify bool, durationMs int) {
 	if osNotify {
 		SendOsNotify("nagare", message)
 	}
+}
+
+// SendPopup opens a popup notification in a tmux split.
+func SendPopup(sessionName, eventType, message string, workingSeconds, popupTimeout int) {
+	nagareBin := bin.FindSelf()
+	args := []string{
+		"popup-notif",
+		"--session", sessionName,
+		"--event", eventType,
+		"--message", message,
+		"--timeout", fmt.Sprintf("%d", popupTimeout),
+	}
+	if workingSeconds > 0 {
+		args = append(args, "--duration", fmt.Sprintf("%d", workingSeconds))
+	}
+
+	// Get active pane to split from
+	paneID := tmux.RunTmux("display-message", "-p", "#{pane_id}")
+	if paneID == "" {
+		return
+	}
+	cmd := strings.Join(append([]string{nagareBin}, args...), " ")
+	tmux.RunTmux("split-window", "-t", paneID, "-v", "-l", "30%", cmd)
 }

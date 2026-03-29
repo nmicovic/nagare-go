@@ -9,7 +9,9 @@ import (
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/log"
+	"github.com/nemke/nagare-go/internal/notifs"
 	"github.com/nemke/nagare-go/internal/picker"
+	"github.com/nemke/nagare-go/internal/popup"
 	"github.com/nemke/nagare-go/internal/setup"
 	"github.com/nemke/nagare-go/internal/theme"
 )
@@ -54,7 +56,37 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd)
+	notifsCmd := &cobra.Command{
+		Use:   "notifs",
+		Short: "View notification history and settings",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := tea.NewProgram(notifs.New(), tea.WithAltScreen())
+			_, err := p.Run()
+			return err
+		},
+	}
+
+	popupNotifCmd := &cobra.Command{
+		Use:   "popup-notif",
+		Short: "Show popup notification for a session",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			session, _ := cmd.Flags().GetString("session")
+			event, _ := cmd.Flags().GetString("event")
+			message, _ := cmd.Flags().GetString("message")
+			timeout, _ := cmd.Flags().GetInt("timeout")
+			duration, _ := cmd.Flags().GetInt("duration")
+			p := tea.NewProgram(popup.New(session, event, message, timeout, duration))
+			_, err := p.Run()
+			return err
+		},
+	}
+	popupNotifCmd.Flags().String("session", "", "Session name")
+	popupNotifCmd.Flags().String("event", "", "Event type (needs_input or task_complete)")
+	popupNotifCmd.Flags().String("message", "", "Notification message")
+	popupNotifCmd.Flags().Int("timeout", 10, "Auto-dismiss timeout in seconds")
+	popupNotifCmd.Flags().Int("duration", 0, "Working seconds (for task_complete)")
+
+	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

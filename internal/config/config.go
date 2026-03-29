@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -215,4 +217,53 @@ func mergeAppearance(defaults, parsed AppearanceConfig, rawVal interface{}) Appe
 // Load loads config from the default path.
 func Load() (NagareConfig, error) {
 	return LoadFrom(DefaultPath())
+}
+
+// Save writes the config to the default path.
+func Save(cfg NagareConfig) error {
+	path := DefaultPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	var b strings.Builder
+
+	// Write notifications section
+	fmt.Fprintf(&b, "[notifications]\nenabled = %t\n\n", cfg.Notifications.Enabled)
+
+	// Write needs_input section
+	fmt.Fprintf(&b, "[notifications.needs_input]\n")
+	fmt.Fprintf(&b, "toast = %t\n", cfg.Notifications.NeedsInput.Toast)
+	fmt.Fprintf(&b, "bell = %t\n", cfg.Notifications.NeedsInput.Bell)
+	fmt.Fprintf(&b, "os_notify = %t\n", cfg.Notifications.NeedsInput.OsNotify)
+	fmt.Fprintf(&b, "popup = %t\n", cfg.Notifications.NeedsInput.Popup)
+	fmt.Fprintf(&b, "popup_timeout = %d\n", cfg.Notifications.NeedsInput.PopupTimeout)
+	fmt.Fprintf(&b, "min_working_seconds = %d\n\n", cfg.Notifications.NeedsInput.MinWorkingSeconds)
+
+	// Write task_complete section
+	fmt.Fprintf(&b, "[notifications.task_complete]\n")
+	fmt.Fprintf(&b, "toast = %t\n", cfg.Notifications.TaskComplete.Toast)
+	fmt.Fprintf(&b, "bell = %t\n", cfg.Notifications.TaskComplete.Bell)
+	fmt.Fprintf(&b, "os_notify = %t\n", cfg.Notifications.TaskComplete.OsNotify)
+	fmt.Fprintf(&b, "popup = %t\n", cfg.Notifications.TaskComplete.Popup)
+	fmt.Fprintf(&b, "popup_timeout = %d\n", cfg.Notifications.TaskComplete.PopupTimeout)
+	fmt.Fprintf(&b, "min_working_seconds = %d\n\n", cfg.Notifications.TaskComplete.MinWorkingSeconds)
+
+	// Write picker section
+	fmt.Fprintf(&b, "[picker]\n")
+	fmt.Fprintf(&b, "quick_project_path = %q\n", cfg.Picker.QuickProjectPath)
+	fmt.Fprintf(&b, "popup_width = %q\n", cfg.Picker.PopupWidth)
+	fmt.Fprintf(&b, "popup_height = %q\n", cfg.Picker.PopupHeight)
+	fmt.Fprintf(&b, "grid_refresh_interval = %f\n", cfg.Picker.GridRefreshInterval)
+	fmt.Fprintf(&b, "show_help_bar = %t\n\n", cfg.Picker.ShowHelpBar)
+
+	// Write appearance section
+	fmt.Fprintf(&b, "[appearance]\n")
+	fmt.Fprintf(&b, "theme = %q\n", cfg.Appearance.Theme)
+	fmt.Fprintf(&b, "icon_style = %q\n\n", cfg.Appearance.IconStyle)
+
+	// Write notification_duration
+	fmt.Fprintf(&b, "notification_duration = %d\n", cfg.NotificationDuration)
+
+	return os.WriteFile(path, []byte(b.String()), 0644)
 }

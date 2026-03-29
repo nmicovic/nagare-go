@@ -6,12 +6,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/picker"
 	"github.com/nemke/nagare-go/internal/setup"
+	"github.com/nemke/nagare-go/internal/theme"
 )
 
 func main() {
+	// Load theme from config
+	cfg, _ := config.Load()
+	theme.Set(cfg.Appearance.Theme)
+
 	rootCmd := &cobra.Command{
 		Use:   "nagare-go",
 		Short: "tmux session manager for AI coding agents",

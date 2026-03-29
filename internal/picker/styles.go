@@ -1,111 +1,64 @@
 package picker
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/nemke/nagare-go/internal/theme"
+)
 
-// Theme holds the color palette for the picker.
-type Theme struct {
-	Background lipgloss.Color
-	Foreground lipgloss.Color
-	Primary    lipgloss.Color
-	Secondary  lipgloss.Color
-	Accent     lipgloss.Color
-	Muted      lipgloss.Color
-	Border     lipgloss.Color
+// Style functions — always build fresh from theme.Current() so theme
+// switches take effect on the next View() call.
+
+func baseStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Foreground(c.Foreground).
+		Background(c.Background)
 }
 
-var themes = map[string]Theme{
-	"tokyonight": {
-		Background: lipgloss.Color("#1a1b26"),
-		Foreground: lipgloss.Color("#c0caf5"),
-		Primary:    lipgloss.Color("#7aa2f7"),
-		Secondary:  lipgloss.Color("#bb9af7"),
-		Accent:     lipgloss.Color("#7dcfff"),
-		Muted:      lipgloss.Color("#565f89"),
-		Border:     lipgloss.Color("#3b4261"),
-	},
-	"catppuccin": {
-		Background: lipgloss.Color("#1e1e2e"),
-		Foreground: lipgloss.Color("#cdd6f4"),
-		Primary:    lipgloss.Color("#89b4fa"),
-		Secondary:  lipgloss.Color("#cba6f7"),
-		Accent:     lipgloss.Color("#89dceb"),
-		Muted:      lipgloss.Color("#6c7086"),
-		Border:     lipgloss.Color("#45475a"),
-	},
-	"gruvbox": {
-		Background: lipgloss.Color("#282828"),
-		Foreground: lipgloss.Color("#ebdbb2"),
-		Primary:    lipgloss.Color("#83a598"),
-		Secondary:  lipgloss.Color("#d3869b"),
-		Accent:     lipgloss.Color("#8ec07c"),
-		Muted:      lipgloss.Color("#928374"),
-		Border:     lipgloss.Color("#504945"),
-	},
+func panelStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return baseStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(c.Border).
+		BorderBackground(c.Background).
+		Padding(1)
 }
 
-// ThemeNames returns available theme names in a stable order.
-func ThemeNames() []string {
-	return []string{"tokyonight", "catppuccin", "gruvbox"}
+func previewPanelStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return baseStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(c.Muted).
+		BorderBackground(c.Background).
+		Padding(0, 1)
 }
 
-// Styles holds all lipgloss styles derived from a theme.
-type Styles struct {
-	Theme        Theme
-	SessionList  lipgloss.Style
-	SessionItem  lipgloss.Style
-	SelectedItem lipgloss.Style
-	DetailPanel  lipgloss.Style
-	PreviewPanel lipgloss.Style
-	SearchInput  lipgloss.Style
-	Title        lipgloss.Style
-	Muted        lipgloss.Style
-	Text         lipgloss.Style
+func titleStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Foreground(c.Primary).
+		Bold(true)
 }
 
-// NewStyles creates styles from a theme name. Falls back to tokyonight.
-func NewStyles(themeName string) Styles {
-	t, ok := themes[themeName]
-	if !ok {
-		t = themes["tokyonight"]
-	}
+func mutedStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Foreground(c.Muted)
+}
 
-	base := lipgloss.NewStyle().
-		Foreground(t.Foreground).
-		Background(t.Background)
+func selectedStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Background(c.Background).
+		Foreground(c.Primary).
+		Bold(true).
+		PaddingLeft(1)
+}
 
-	return Styles{
-		Theme: t,
-		SessionList: base.
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(t.Border).
-			BorderBackground(t.Background).
-			Padding(1),
-		SessionItem: base.
-			PaddingLeft(2),
-		SelectedItem: base.
-			PaddingLeft(1).
-			Foreground(t.Primary).
-			Bold(true),
-		DetailPanel: base.
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(t.Border).
-			BorderBackground(t.Background).
-			Padding(1),
-		PreviewPanel: base.
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(t.Muted).
-			BorderBackground(t.Background).
-			Padding(0, 1),
-		SearchInput: base.
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(t.Accent).
-			BorderBackground(t.Background).
-			Padding(0, 1),
-		Title: lipgloss.NewStyle().
-			Foreground(t.Primary).
-			Bold(true),
-		Muted: lipgloss.NewStyle().
-			Foreground(t.Muted),
-		Text: base,
-	}
+func itemStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Background(c.Background).
+		Foreground(c.Foreground).
+		PaddingLeft(2)
 }

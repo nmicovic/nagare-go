@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/state"
+	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
 
@@ -51,8 +52,6 @@ type Model struct {
 	preview     string
 	width       int
 	height      int
-	styles      Styles
-	themeIndex  int
 	statesDir   string
 	searchInput textinput.Model
 }
@@ -65,7 +64,6 @@ func New() Model {
 	ti.CharLimit = 64
 
 	return Model{
-		styles:      NewStyles("tokyonight"),
 		statesDir:   state.DefaultStatesDir(),
 		searchInput: ti,
 	}
@@ -112,7 +110,6 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	// Split terminal: 20% left, 80% right
 	leftOuter := m.width / 5
 	rightOuter := m.width - leftOuter
 
@@ -127,7 +124,6 @@ func (m Model) View() string {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// In search mode, handle escape and enter specially.
 	if m.searchMode {
 		switch key {
 		case keyEscape:
@@ -192,9 +188,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewMode = ListView
 		}
 	case keyCycleTheme:
-		names := ThemeNames()
-		m.themeIndex = (m.themeIndex + 1) % len(names)
-		m.styles = NewStyles(names[m.themeIndex])
+		theme.CycleNext()
 	}
 
 	return m, nil
@@ -280,7 +274,6 @@ func statusOrder(s models.SessionStatus) int {
 // --- View rendering ---
 
 func (m Model) viewLeft(outerWidth, outerHeight int) string {
-	// Border takes 2 chars width, padding 1 each side = 4 total horizontal
 	innerWidth := outerWidth - 4
 	if innerWidth < 10 {
 		innerWidth = 10
@@ -300,19 +293,18 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 			running++
 		}
 	}
-	b.WriteString(m.styles.Muted.Render(fmt.Sprintf(" %d sessions | %d waiting | %d running", total, waiting, running)))
+	b.WriteString(mutedStyle().Render(fmt.Sprintf(" %d sessions | %d waiting | %d running", total, waiting, running)))
 	b.WriteString("\n\n")
 
 	// Search input
 	if m.searchMode {
 		b.WriteString(m.searchInput.View())
 	} else {
-		b.WriteString(m.styles.Muted.Render(" / to search"))
+		b.WriteString(mutedStyle().Render(" / to search"))
 	}
 	b.WriteString("\n\n")
 
 	// Session list
-	// border top/bottom = 2, padding top/bottom = 2, stats = 2 lines, search = 2 lines
 	listHeight := outerHeight - 10
 	if listHeight < 1 {
 		listHeight = 1
@@ -324,7 +316,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 		b.WriteString(m.renderGridView(innerWidth, listHeight))
 	}
 
-	return m.styles.SessionList.
+	return panelStyle().
 		Width(outerWidth).
 		Height(outerHeight).
 		Render(b.String())
@@ -332,10 +324,9 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 
 func (m Model) renderListView(width, height int) string {
 	if len(m.filtered) == 0 {
-		return m.styles.Muted.Render("  No sessions found")
+		return mutedStyle().Render("  No sessions found")
 	}
 
-	// Scroll window
 	start := 0
 	if m.cursor >= height {
 		start = m.cursor - height + 1
@@ -345,8 +336,7 @@ func (m Model) renderListView(width, height int) string {
 		end = len(m.filtered)
 	}
 
-	bg := m.styles.Theme.Background
-	fg := m.styles.Theme.Foreground
+	c := theme.Current().Colors
 
 	var lines []string
 	for i := start; i < end; i++ {
@@ -368,22 +358,22 @@ func (m Model) renderListView(width, height int) string {
 			name = string(runes[:maxName]) + "..."
 		}
 
-		nameStyled := lipgloss.NewStyle().Foreground(fg).Render(name)
+		nameStyled := lipgloss.NewStyle().Foreground(c.Foreground).Render(name)
 		content := fmt.Sprintf(" %s %s %s", dot, nameStyled, badge)
 
 		var line string
 		if i == m.cursor {
 			line = lipgloss.NewStyle().
-				Background(bg).
-				Foreground(m.styles.Theme.Primary).
+				Background(c.Background).
+				Foreground(c.Primary).
 				Bold(true).
 				PaddingLeft(1).
 				Width(width).
 				Render("> " + content[1:])
 		} else {
 			line = lipgloss.NewStyle().
-				Background(bg).
-				Foreground(fg).
+				Background(c.Background).
+				Foreground(c.Foreground).
 				PaddingLeft(2).
 				Width(width).
 				Render(content)
@@ -395,7 +385,7 @@ func (m Model) renderListView(width, height int) string {
 
 func (m Model) renderGridView(width, height int) string {
 	if len(m.filtered) == 0 {
-		return m.styles.Muted.Render("  No sessions found")
+		return mutedStyle().Render("  No sessions found")
 	}
 
 	cols := 2
@@ -405,14 +395,13 @@ func (m Model) renderGridView(width, height int) string {
 		cellWidth = width - 2
 	}
 
-	bg := m.styles.Theme.Background
-	fg := m.styles.Theme.Foreground
+	c := theme.Current().Colors
 
 	var rows []string
 	for i := 0; i < len(m.filtered); i += cols {
 		var cells []string
-		for c := 0; c < cols && i+c < len(m.filtered); c++ {
-			idx := i + c
+		for j := 0; j < cols && i+j < len(m.filtered); j++ {
+			idx := i + j
 			s := m.filtered[idx]
 			dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
 			name := s.Name
@@ -425,11 +414,11 @@ func (m Model) renderGridView(width, height int) string {
 			var cell string
 			if idx == m.cursor {
 				cell = lipgloss.NewStyle().
-					Background(bg).Foreground(m.styles.Theme.Primary).Bold(true).
+					Background(c.Background).Foreground(c.Primary).Bold(true).
 					Width(cellWidth).Render(content)
 			} else {
 				cell = lipgloss.NewStyle().
-					Background(bg).Foreground(fg).
+					Background(c.Background).Foreground(c.Foreground).
 					Width(cellWidth).Render(content)
 			}
 			cells = append(cells, cell)
@@ -441,24 +430,23 @@ func (m Model) renderGridView(width, height int) string {
 
 func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
-		return m.styles.DetailPanel.
+		return panelStyle().
 			Width(outerWidth).
 			Height(outerHeight).
-			Render(m.styles.Muted.Render("No session selected"))
+			Render(mutedStyle().Render("No session selected"))
 	}
 
-	// Inner width after border (2) + padding (2) = 4
 	innerWidth := outerWidth - 4
 	if innerWidth < 10 {
 		innerWidth = 10
 	}
 
 	s := m.filtered[m.cursor]
+	c := theme.Current().Colors
 
 	// Detail section
-	t := m.styles.Theme
-	label := lipgloss.NewStyle().Foreground(t.Muted)
-	val := lipgloss.NewStyle().Foreground(t.Foreground)
+	label := lipgloss.NewStyle().Foreground(c.Muted)
+	val := lipgloss.NewStyle().Foreground(c.Foreground)
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status)))
 	agentStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
@@ -466,7 +454,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		Padding(0, 1)
 
 	var detail strings.Builder
-	detail.WriteString(m.styles.Title.Render(s.Name))
+	detail.WriteString(titleStyle().Render(s.Name))
 	detail.WriteString("\n\n")
 	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), val.Render(s.Path)))
 	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Agent "), agentStyle.Render(models.AgentLabel(s.AgentType))))
@@ -483,7 +471,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	}
 
 	detailHeight := outerHeight / 3
-	detailStr := m.styles.DetailPanel.
+	detailStr := panelStyle().
 		Width(outerWidth).
 		Height(detailHeight).
 		Render(detail.String())
@@ -496,12 +484,9 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 
 	previewContent := m.preview
 	if previewContent == "" {
-		previewContent = m.styles.Muted.Render("No preview available")
+		previewContent = mutedStyle().Render("No preview available")
 	} else {
-		// Truncate each line to inner width and limit line count.
-		// Preview comes from tmux capture-pane which can return lines
-		// as wide as the captured pane — we must truncate to fit.
-		maxLines := previewHeight - 4 // border (2) + padding (0..1)
+		maxLines := previewHeight - 4
 		if maxLines < 1 {
 			maxLines = 1
 		}
@@ -517,7 +502,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		previewContent = strings.Join(lines, "\n")
 	}
 
-	previewStr := m.styles.PreviewPanel.
+	previewStr := previewPanelStyle().
 		Width(outerWidth).
 		Height(previewHeight).
 		Render(previewContent)

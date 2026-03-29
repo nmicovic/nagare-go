@@ -63,9 +63,12 @@ func New() Model {
 	ti.Prompt = " / "
 	ti.CharLimit = 64
 
+	ti.Focus()
+
 	return Model{
 		statesDir:   state.DefaultStatesDir(),
 		searchInput: ti,
+		searchMode:  true,
 	}
 }
 

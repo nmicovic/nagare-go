@@ -92,7 +92,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
-		return m, tea.Tick(1*time.Second, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+		return m, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
 
 	case tickScanMsg:
 		return m, doScan(m.statesDir)
@@ -152,10 +152,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyUp, keyK:
 		if m.cursor > 0 {
 			m.cursor--
+			return m, m.doPreview()
 		}
 	case keyDown, keyJ:
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
+			return m, m.doPreview()
 		}
 	case keyEnter:
 		if len(m.filtered) > 0 {
@@ -209,7 +211,7 @@ func doScan(statesDir string) tea.Cmd {
 }
 
 func doPreviewTick() tea.Cmd {
-	return tea.Tick(1*time.Second, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
 }
 
 func (m Model) doPreview() tea.Cmd {

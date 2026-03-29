@@ -62,3 +62,13 @@ func itemStyle() lipgloss.Style {
 		Foreground(c.Foreground).
 		PaddingLeft(2)
 }
+
+func dialogStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Background(c.Background).
+		Foreground(c.Foreground).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(c.Primary).
+		BorderBackground(c.Background)
+}

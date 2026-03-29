@@ -86,16 +86,9 @@ func helpOverlay(width, height int) string {
 		mutedStyle().Render("  Press F1 or Esc to close"),
 	}, "\n")
 
-	w := width * 2 / 3
-	h := height * 2 / 3
-	return lipgloss.NewStyle().
-		Background(c.Background).
-		Foreground(c.Foreground).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Primary).
-		BorderBackground(c.Background).
-		Width(w).
-		Height(h).
+	return dialogStyle().
+		Width(width * 2 / 3).
+		Height(height * 2 / 3).
 		Padding(2, 4).
 		Render(content)
 }

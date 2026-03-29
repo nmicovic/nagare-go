@@ -43,6 +43,7 @@ type PreviewUpdatedMsg string
 
 type tickScanMsg struct{}
 type tickPreviewMsg struct{}
+type gridPreviewsMsg map[string]string
 
 // Model is the main Bubble Tea model for the picker TUI.
 type Model struct {
@@ -55,13 +56,14 @@ type Model struct {
 	width       int
 	height      int
 	statesDir   string
-	searchInput   textinput.Model
-	showHelp      bool // F1 help overlay
-	showHelpBar   bool // bottom hint bar
-	showThemePick bool     // Ctrl+t theme picker overlay
-	themeNames    []string // cached sorted theme names
-	themeCursor   int      // cursor in theme picker
-	themeOriginal string   // theme before opening picker (for cancel)
+	searchInput    textinput.Model
+	showHelp       bool // F1 help overlay
+	showHelpBar    bool // bottom hint bar
+	showThemePick  bool     // Ctrl+t theme picker overlay
+	themeNames     []string // cached sorted theme names
+	themeCursor    int      // cursor in theme picker
+	themeOriginal  string   // theme before opening picker (for cancel)
+	gridPreviews   map[string]string // cached grid cell previews keyed by pane target
 }
 
 // New creates a new picker model with default settings.
@@ -105,6 +107,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
 		return m, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+
+	case gridPreviewsMsg:
+		m.gridPreviews = map[string]string(msg)
+		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
 
 	case tickScanMsg:
 		return m, doScan(m.statesDir)
@@ -278,6 +284,22 @@ func (m Model) doPreview() tea.Cmd {
 	if len(m.filtered) == 0 {
 		return func() tea.Msg { return PreviewUpdatedMsg("") }
 	}
+
+	// Grid view: capture all visible sessions in background
+	if m.viewMode == GridView {
+		sessions := make([]models.Session, len(m.filtered))
+		copy(sessions, m.filtered)
+		return func() tea.Msg {
+			previews := make(map[string]string)
+			for _, s := range sessions {
+				target := tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex)
+				previews[target] = CapturePreview(s.Name, s.WindowIndex, s.PaneIndex)
+			}
+			return gridPreviewsMsg(previews)
+		}
+	}
+
+	// List view: capture only the selected session
 	s := m.filtered[m.cursor]
 	return func() tea.Msg {
 		content := CapturePreview(s.Name, s.WindowIndex, s.PaneIndex)
@@ -694,9 +716,10 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 }
 
 func (m Model) getGridPreview(s models.Session, width, height int) string {
-	content := CapturePreview(s.Name, s.WindowIndex, s.PaneIndex)
+	target := tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex)
+	content := m.gridPreviews[target]
 	if content == "" {
-		return mutedStyle().Render("No preview")
+		return mutedStyle().Render("Loading...")
 	}
 
 	lines := strings.Split(content, "\n")

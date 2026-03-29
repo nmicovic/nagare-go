@@ -6,7 +6,6 @@ package picker
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -59,7 +58,7 @@ func placeOverlay(width, height int, fg, bg string) string {
 		pos += ansi.StringWidth(fgLine)
 
 		// Right portion of bg — use ansi.Cut to skip past the overlay region
-		bgW := lipgloss.Width(bgLine)
+		bgW := ansi.StringWidth(bgLine)
 		right := ansi.Cut(bgLine, pos, bgW)
 		rightW := ansi.StringWidth(right)
 

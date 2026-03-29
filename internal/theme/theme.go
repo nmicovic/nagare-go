@@ -88,20 +88,3 @@ func Get(name string) *Theme {
 	return all[name]
 }
 
-// CycleNext switches to the next theme in alphabetical order.
-func CycleNext() string {
-	names := Names()
-	cur := Current().Name
-	for i, name := range names {
-		if name == cur {
-			next := names[(i+1)%len(names)]
-			Set(next)
-			return next
-		}
-	}
-	if len(names) > 0 {
-		Set(names[0])
-		return names[0]
-	}
-	return cur
-}

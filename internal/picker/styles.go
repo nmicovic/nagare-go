@@ -4,7 +4,6 @@ import "github.com/charmbracelet/lipgloss"
 
 // Theme holds the color palette for the picker.
 type Theme struct {
-	Name       string
 	Background lipgloss.Color
 	Foreground lipgloss.Color
 	Primary    lipgloss.Color
@@ -16,7 +15,6 @@ type Theme struct {
 
 var themes = map[string]Theme{
 	"tokyonight": {
-		Name:       "tokyonight",
 		Background: lipgloss.Color("#1a1b26"),
 		Foreground: lipgloss.Color("#c0caf5"),
 		Primary:    lipgloss.Color("#7aa2f7"),
@@ -26,7 +24,6 @@ var themes = map[string]Theme{
 		Border:     lipgloss.Color("#3b4261"),
 	},
 	"catppuccin": {
-		Name:       "catppuccin",
 		Background: lipgloss.Color("#1e1e2e"),
 		Foreground: lipgloss.Color("#cdd6f4"),
 		Primary:    lipgloss.Color("#89b4fa"),
@@ -36,7 +33,6 @@ var themes = map[string]Theme{
 		Border:     lipgloss.Color("#45475a"),
 	},
 	"gruvbox": {
-		Name:       "gruvbox",
 		Background: lipgloss.Color("#282828"),
 		Foreground: lipgloss.Color("#ebdbb2"),
 		Primary:    lipgloss.Color("#83a598"),
@@ -61,48 +57,55 @@ type Styles struct {
 	DetailPanel  lipgloss.Style
 	PreviewPanel lipgloss.Style
 	SearchInput  lipgloss.Style
-	StatusBar    lipgloss.Style
 	Title        lipgloss.Style
 	Muted        lipgloss.Style
+	Text         lipgloss.Style
 }
 
 // NewStyles creates styles from a theme name. Falls back to tokyonight.
 func NewStyles(themeName string) Styles {
-	theme, ok := themes[themeName]
+	t, ok := themes[themeName]
 	if !ok {
-		theme = themes["tokyonight"]
+		t = themes["tokyonight"]
 	}
 
+	base := lipgloss.NewStyle().
+		Foreground(t.Foreground).
+		Background(t.Background)
+
 	return Styles{
-		Theme: theme,
-		SessionList: lipgloss.NewStyle().
+		Theme: t,
+		SessionList: base.
 			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Border).
+			BorderForeground(t.Border).
+			BorderBackground(t.Background).
 			Padding(1),
-		SessionItem: lipgloss.NewStyle().
+		SessionItem: base.
 			PaddingLeft(2),
-		SelectedItem: lipgloss.NewStyle().
+		SelectedItem: base.
 			PaddingLeft(1).
-			Foreground(theme.Primary).
+			Foreground(t.Primary).
 			Bold(true),
-		DetailPanel: lipgloss.NewStyle().
+		DetailPanel: base.
 			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Border).
+			BorderForeground(t.Border).
+			BorderBackground(t.Background).
 			Padding(1),
-		PreviewPanel: lipgloss.NewStyle().
+		PreviewPanel: base.
 			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(theme.Muted).
+			BorderForeground(t.Muted).
+			BorderBackground(t.Background).
 			Padding(0, 1),
-		SearchInput: lipgloss.NewStyle().
+		SearchInput: base.
 			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(theme.Accent).
+			BorderForeground(t.Accent).
+			BorderBackground(t.Background).
 			Padding(0, 1),
-		StatusBar: lipgloss.NewStyle().
-			Foreground(theme.Muted),
 		Title: lipgloss.NewStyle().
-			Foreground(theme.Primary).
+			Foreground(t.Primary).
 			Bold(true),
 		Muted: lipgloss.NewStyle().
-			Foreground(theme.Muted),
+			Foreground(t.Muted),
+		Text: base,
 	}
 }

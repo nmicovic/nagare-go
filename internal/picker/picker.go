@@ -345,13 +345,18 @@ func (m Model) renderListView(width, height int) string {
 		end = len(m.filtered)
 	}
 
+	bg := m.styles.Theme.Background
+	fg := m.styles.Theme.Foreground
+
 	var lines []string
 	for i := start; i < end; i++ {
 		s := m.filtered[i]
-		statusDot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
-		agentBadge := lipgloss.NewStyle().
+		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
+		badge := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
-			Render(models.AgentLabel(s.AgentType))
+			Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
+			Padding(0, 1).
+			Render(string(models.AgentLabel(s.AgentType)[0]))
 
 		name := s.Name
 		maxName := width - 20
@@ -363,12 +368,25 @@ func (m Model) renderListView(width, height int) string {
 			name = string(runes[:maxName]) + "..."
 		}
 
-		line := fmt.Sprintf(" %s %s  %s", statusDot, name, agentBadge)
+		nameStyled := lipgloss.NewStyle().Foreground(fg).Render(name)
+		content := fmt.Sprintf(" %s %s %s", dot, nameStyled, badge)
 
+		var line string
 		if i == m.cursor {
-			line = m.styles.SelectedItem.Render("> " + line[1:])
+			line = lipgloss.NewStyle().
+				Background(bg).
+				Foreground(m.styles.Theme.Primary).
+				Bold(true).
+				PaddingLeft(1).
+				Width(width).
+				Render("> " + content[1:])
 		} else {
-			line = m.styles.SessionItem.Render(line)
+			line = lipgloss.NewStyle().
+				Background(bg).
+				Foreground(fg).
+				PaddingLeft(2).
+				Width(width).
+				Render(content)
 		}
 		lines = append(lines, line)
 	}
@@ -387,24 +405,32 @@ func (m Model) renderGridView(width, height int) string {
 		cellWidth = width - 2
 	}
 
+	bg := m.styles.Theme.Background
+	fg := m.styles.Theme.Foreground
+
 	var rows []string
 	for i := 0; i < len(m.filtered); i += cols {
 		var cells []string
 		for c := 0; c < cols && i+c < len(m.filtered); c++ {
 			idx := i + c
 			s := m.filtered[idx]
-			statusDot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
+			dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
 			name := s.Name
 			maxLen := cellWidth - 6
 			if utf8.RuneCountInString(name) > maxLen {
 				runes := []rune(name)
 				name = string(runes[:maxLen]) + ".."
 			}
-			cell := fmt.Sprintf(" %s %s", statusDot, name)
+			content := fmt.Sprintf(" %s %s", dot, name)
+			var cell string
 			if idx == m.cursor {
-				cell = m.styles.SelectedItem.Width(cellWidth).Render(cell)
+				cell = lipgloss.NewStyle().
+					Background(bg).Foreground(m.styles.Theme.Primary).Bold(true).
+					Width(cellWidth).Render(content)
 			} else {
-				cell = m.styles.SessionItem.Width(cellWidth).Render(cell)
+				cell = lipgloss.NewStyle().
+					Background(bg).Foreground(fg).
+					Width(cellWidth).Render(content)
 			}
 			cells = append(cells, cell)
 		}
@@ -430,27 +456,30 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	s := m.filtered[m.cursor]
 
 	// Detail section
+	t := m.styles.Theme
+	label := lipgloss.NewStyle().Foreground(t.Muted)
+	val := lipgloss.NewStyle().Foreground(t.Foreground)
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status)))
+	agentStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
+		Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
+		Padding(0, 1)
+
 	var detail strings.Builder
 	detail.WriteString(m.styles.Title.Render(s.Name))
 	detail.WriteString("\n\n")
-
-	statusColor := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status)))
-	agentColor := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
-		Background(lipgloss.Color(models.AgentBgColor(s.AgentType)))
-
-	detail.WriteString(fmt.Sprintf("  Path     %s\n", m.styles.Muted.Render(s.Path)))
-	detail.WriteString(fmt.Sprintf("  Agent    %s\n", agentColor.Render(models.AgentLabel(s.AgentType))))
-	detail.WriteString(fmt.Sprintf("  Status   %s\n", statusColor.Render(models.StatusLabel(s.Status))))
+	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), val.Render(s.Path)))
+	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Agent "), agentStyle.Render(models.AgentLabel(s.AgentType))))
+	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Status"), statusStyle.Render(models.StatusLabel(s.Status))))
 
 	if s.Details.GitBranch != "" {
-		detail.WriteString(fmt.Sprintf("  Branch   %s\n", m.styles.Muted.Render(s.Details.GitBranch)))
+		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))
 	}
 	if s.Details.Model != "" {
-		detail.WriteString(fmt.Sprintf("  Model    %s\n", m.styles.Muted.Render(s.Details.Model)))
+		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Model "), val.Render(s.Details.Model)))
 	}
 	if s.Details.ContextUsage != "" {
-		detail.WriteString(fmt.Sprintf("  Context  %s\n", m.styles.Muted.Render(s.Details.ContextUsage)))
+		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Ctx   "), val.Render(s.Details.ContextUsage)))
 	}
 
 	detailHeight := outerHeight / 3

@@ -47,7 +47,6 @@ type Model struct {
 	sessions    []models.Session
 	filtered    []models.Session
 	cursor      int
-	searchMode  bool
 	viewMode    ViewMode
 	sortMode    SortMode
 	preview     string
@@ -69,7 +68,6 @@ func New() Model {
 	return Model{
 		statesDir:   state.DefaultStatesDir(),
 		searchInput: ti,
-		searchMode:  true,
 	}
 }
 
@@ -128,66 +126,9 @@ func (m Model) View() string {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	if m.searchMode {
-		switch key {
-		case keyToggleView:
-			if m.viewMode == ListView {
-				m.viewMode = GridView
-			} else {
-				m.viewMode = ListView
-			}
-			return m, nil
-		case keyCycleTheme:
-			theme.CycleNext()
-			return m, nil
-		case keyEscape:
-			m.searchMode = false
-			m.searchInput.Blur()
-			m.searchInput.SetValue("")
-			m.applyFilter()
-			return m, nil
-		case keyEnter:
-			m.searchMode = false
-			m.searchInput.Blur()
-			// Jump to the selected session
-			if len(m.filtered) > 0 {
-				s := m.filtered[m.cursor]
-				target := fmt.Sprintf("%s:%d", s.Name, s.WindowIndex)
-				tmux.RunTmux("switch-client", "-t", target)
-				return m, tea.Quit
-			}
-			return m, nil
-		case keyUp, keyK:
-			if m.cursor > 0 {
-				m.cursor--
-				return m, m.doPreview()
-			}
-			return m, nil
-		case keyDown, keyJ:
-			if m.cursor < len(m.filtered)-1 {
-				m.cursor++
-				return m, m.doPreview()
-			}
-			return m, nil
-		default:
-			var cmd tea.Cmd
-			m.searchInput, cmd = m.searchInput.Update(msg)
-			m.applyFilter()
-			return m, cmd
-		}
-	}
-
 	switch key {
-	case keyUp, keyK:
-		if m.cursor > 0 {
-			m.cursor--
-			return m, m.doPreview()
-		}
-	case keyDown, keyJ:
-		if m.cursor < len(m.filtered)-1 {
-			m.cursor++
-			return m, m.doPreview()
-		}
+	case keyEscape:
+		return m, tea.Quit
 	case keyEnter:
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
@@ -195,33 +136,46 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			tmux.RunTmux("switch-client", "-t", target)
 			return m, tea.Quit
 		}
-	case keySearch:
-		m.searchMode = true
-		return m, m.searchInput.Focus()
-	case keyQuit:
-		return m, tea.Quit
-	case keyEscape:
-		return m, tea.Quit
-	case keyApprove:
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "y", "Enter")
+	case keyUp:
+		if m.cursor > 0 {
+			m.cursor--
+			return m, m.doPreview()
 		}
-	case keyApproveAlways:
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "a", "Enter")
+		return m, nil
+	case keyDown:
+		if m.cursor < len(m.filtered)-1 {
+			m.cursor++
+			return m, m.doPreview()
 		}
-	case keyInlinePrompt:
-		// Placeholder for inline prompt feature.
+		return m, nil
 	case keyToggleView:
 		if m.viewMode == ListView {
 			m.viewMode = GridView
 		} else {
 			m.viewMode = ListView
 		}
+		return m, nil
 	case keyCycleTheme:
 		theme.CycleNext()
+		return m, nil
+	case keyApprove:
+		if len(m.filtered) > 0 {
+			s := m.filtered[m.cursor]
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "y", "Enter")
+		}
+		return m, nil
+	case keyApproveAlways:
+		if len(m.filtered) > 0 {
+			s := m.filtered[m.cursor]
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "a", "Enter")
+		}
+		return m, nil
+	default:
+		// All other keys go to search input
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		m.applyFilter()
+		return m, cmd
 	}
 
 	return m, nil
@@ -335,12 +289,8 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	b.WriteString(mutedStyle().Render(fmt.Sprintf(" %d sessions | %d waiting | %d running", total, waiting, running)))
 	b.WriteString("\n\n")
 
-	// Search input
-	if m.searchMode {
-		b.WriteString(m.searchInput.View())
-	} else {
-		b.WriteString(mutedStyle().Render(" / to search"))
-	}
+	// Search input (always active)
+	b.WriteString(m.searchInput.View())
 	b.WriteString("\n\n")
 
 	// Session list

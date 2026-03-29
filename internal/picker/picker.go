@@ -381,8 +381,8 @@ func (m Model) renderListView(width, height int) string {
 		var line string
 		if i == m.cursor {
 			line = lipgloss.NewStyle().
-				Background(c.Background).
-				Foreground(c.Primary).
+				Background(c.Primary).
+				Foreground(c.Background).
 				Bold(true).
 				PaddingLeft(1).
 				Width(width).
@@ -431,7 +431,7 @@ func (m Model) renderGridView(width, height int) string {
 			var cell string
 			if idx == m.cursor {
 				cell = lipgloss.NewStyle().
-					Background(c.Background).Foreground(c.Primary).Bold(true).
+					Background(c.Primary).Foreground(c.Background).Bold(true).
 					Width(cellWidth).Render(content)
 			} else {
 				cell = lipgloss.NewStyle().

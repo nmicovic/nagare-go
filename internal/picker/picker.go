@@ -130,6 +130,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.searchMode {
 		switch key {
+		case keyToggleView:
+			if m.viewMode == ListView {
+				m.viewMode = GridView
+			} else {
+				m.viewMode = ListView
+			}
+			return m, nil
+		case keyCycleTheme:
+			theme.CycleNext()
+			return m, nil
 		case keyEscape:
 			m.searchMode = false
 			m.searchInput.Blur()

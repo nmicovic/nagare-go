@@ -8,6 +8,7 @@ import (
 
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/picker"
+	"github.com/nemke/nagare-go/internal/setup"
 )
 
 func main() {
@@ -37,8 +38,8 @@ func main() {
 	setupCmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Install hooks to ~/.claude/settings.json",
-		Run: func(cmd *cobra.Command, args []string) {
-			println("setup: not implemented yet")
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return setup.Run()
 		},
 	}
 

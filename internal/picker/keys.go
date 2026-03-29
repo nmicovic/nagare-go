@@ -10,4 +10,5 @@ const (
 	keyApproveAlways = "ctrl+a"
 	keyToggleView    = "tab"
 	keyCycleTheme    = "ctrl+t"
+	keyHelp          = "f1"
 )

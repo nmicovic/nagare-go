@@ -11,12 +11,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
-	"github.com/sahilm/fuzzy"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/sahilm/fuzzy"
 )
 
 // ViewMode controls the session display layout.
@@ -54,21 +55,30 @@ type Model struct {
 	width       int
 	height      int
 	statesDir   string
-	searchInput textinput.Model
+	searchInput   textinput.Model
+	showHelp      bool // F1 help overlay
+	showHelpBar   bool // bottom hint bar
+	showThemePick bool     // Ctrl+t theme picker overlay
+	themeNames    []string // cached sorted theme names
+	themeCursor   int      // cursor in theme picker
+	themeOriginal string   // theme before opening picker (for cancel)
 }
 
 // New creates a new picker model with default settings.
 func New() Model {
 	ti := textinput.New()
 	ti.Placeholder = "search sessions..."
-	ti.Prompt = " / "
+	ti.Prompt = " > "
 	ti.CharLimit = 64
 
 	ti.Focus()
 
+	cfg, _ := config.Load()
+
 	return Model{
 		statesDir:   state.DefaultStatesDir(),
 		searchInput: ti,
+		showHelpBar: cfg.Picker.ShowHelpBar,
 	}
 }
 
@@ -114,17 +124,38 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	if m.viewMode == GridView {
-		return m.viewGrid(m.width, m.height)
+	// Render base content
+	contentHeight := m.height
+	if m.showHelpBar {
+		contentHeight = m.height - 1
 	}
 
-	leftOuter := m.width / 5
-	rightOuter := m.width - leftOuter
+	var base string
+	if m.viewMode == GridView {
+		base = m.viewGrid(m.width, contentHeight)
+	} else {
+		leftOuter := m.width / 5
+		rightOuter := m.width - leftOuter
+		left := m.viewLeft(leftOuter, contentHeight)
+		right := m.viewRight(rightOuter, contentHeight)
+		base = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	}
 
-	left := m.viewLeft(leftOuter, m.height)
-	right := m.viewRight(rightOuter, m.height)
+	if m.showHelpBar {
+		base = base + "\n" + helpBar(m.width)
+	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	// Overlays drawn on top of base content
+	if m.showHelp {
+		overlay := helpOverlay(m.width, m.height)
+		return placeOverlay(m.width, m.height, overlay, base)
+	}
+	if m.showThemePick {
+		overlay := themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height)
+		return placeOverlay(m.width, m.height, overlay, base)
+	}
+
+	return base
 }
 
 // --- Key handling ---
@@ -133,8 +164,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	log.Debug("key: %q type=%d", key, msg.Type)
 
+	// Theme picker intercepts all keys when open
+	if m.showThemePick {
+		return m.handleThemePickKey(key)
+	}
+
 	switch key {
+	case keyHelp:
+		m.showHelp = !m.showHelp
+		return m, nil
 	case keyEscape:
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
 		return m, tea.Quit
 	case keyEnter:
 		if len(m.filtered) > 0 {
@@ -183,8 +226,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyCycleTheme:
-		next := theme.CycleNext()
-		log.Info("theme switched to %s", next)
+		m.showThemePick = true
+		m.themeNames = theme.Names()
+		m.themeOriginal = theme.Current().Name
+		// Set cursor to current theme
+		for i, name := range m.themeNames {
+			if name == m.themeOriginal {
+				m.themeCursor = i
+				break
+			}
+		}
 		return m, nil
 	case keyApprove:
 		if len(m.filtered) > 0 {
@@ -511,11 +562,17 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if previewContent == "" {
 		previewContent = mutedStyle().Render("No preview available")
 	} else {
-		maxLines := previewHeight - 4
+		// Border = 2 lines, padding = 0 vertical for preview panel
+		maxLines := previewHeight - 2
 		if maxLines < 1 {
 			maxLines = 1
 		}
 		lines := strings.Split(previewContent, "\n")
+		// Trim trailing empty lines
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		// Take the bottom portion
 		if len(lines) > maxLines {
 			lines = lines[len(lines)-maxLines:]
 		}
@@ -557,15 +614,13 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 			Render(mutedStyle().Render("No sessions found"))
 	}
 
-	// Search bar at top
+	// Search bar at top (1 line + 1 blank line = 2 lines)
 	searchBar := m.searchInput.View()
 
 	cols := gridColumns(len(m.filtered))
 	cellWidth := totalWidth / cols
-	cellHeight := totalHeight - 2 // subtract search bar height
-	if cols > 1 {
-		cellHeight = cellHeight / ((len(m.filtered) + cols - 1) / cols)
-	}
+	numRows := (len(m.filtered) + cols - 1) / cols
+	cellHeight := (totalHeight - 2 - numRows) / numRows // search + row gaps
 	if cellHeight < 8 {
 		cellHeight = 8
 	}
@@ -595,16 +650,22 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 				meta += mutedStyle().Render(fmt.Sprintf("  (%s)", s.Details.GitBranch))
 			}
 
-			// Preview: capture pane content for this session
+			// Separator between header and preview
 			innerWidth := cellWidth - 6 // borders + padding
-			previewHeight := cellHeight - 6
+			if innerWidth < 10 {
+				innerWidth = 10
+			}
+			separator := lipgloss.NewStyle().Foreground(c.Border).Render(strings.Repeat("─", innerWidth))
+
+			// Preview: capture pane content for this session
+			previewHeight := cellHeight - 7
 			if previewHeight < 1 {
 				previewHeight = 1
 			}
 
 			preview := m.getGridPreview(s, innerWidth, previewHeight)
 
-			content := header + "\n" + meta + "\n\n" + preview
+			content := header + "\n" + meta + "\n" + separator + "\n" + preview
 
 			// Border color: bright for selected, muted for others
 			borderColor := c.Border
@@ -629,7 +690,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 	}
 
 	grid := strings.Join(rows, "\n")
-	return searchBar + "\n" + grid
+	return " " + searchBar + "\n" + grid
 }
 
 func (m Model) getGridPreview(s models.Session, width, height int) string {

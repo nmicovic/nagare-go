@@ -81,6 +81,13 @@ func Names() []string {
 	return names
 }
 
+// Get returns a theme by name, or nil if not found.
+func Get(name string) *Theme {
+	mu.RLock()
+	defer mu.RUnlock()
+	return all[name]
+}
+
 // CycleNext switches to the next theme in alphabetical order.
 func CycleNext() string {
 	names := Names()

@@ -30,6 +30,7 @@ type PickerConfig struct {
 	PopupWidth          string  `toml:"popup_width"`
 	PopupHeight         string  `toml:"popup_height"`
 	GridRefreshInterval float64 `toml:"grid_refresh_interval"`
+	ShowHelpBar         bool    `toml:"show_help_bar"`
 }
 
 // AppearanceConfig controls visual settings.
@@ -73,6 +74,7 @@ func Default() NagareConfig {
 			PopupWidth:          "80%",
 			PopupHeight:         "80%",
 			GridRefreshInterval: 0.5,
+			ShowHelpBar:         true,
 		},
 		Appearance: AppearanceConfig{
 			Theme:     "tokyonight",
@@ -187,6 +189,9 @@ func mergePicker(defaults, parsed PickerConfig, rawVal interface{}) PickerConfig
 	}
 	if _, ok := m["grid_refresh_interval"]; ok {
 		result.GridRefreshInterval = parsed.GridRefreshInterval
+	}
+	if _, ok := m["show_help_bar"]; ok {
+		result.ShowHelpBar = parsed.ShowHelpBar
 	}
 	return result
 }

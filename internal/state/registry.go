@@ -41,13 +41,18 @@ func (r *Registry) load() {
 		r.sessions = nil
 		return
 	}
-	json.Unmarshal(data, &r.sessions)
+	_ = json.Unmarshal(data, &r.sessions)
 }
 
-func (r *Registry) save() {
-	data, _ := json.MarshalIndent(r.sessions, "", "  ")
-	os.MkdirAll(filepath.Dir(r.path), 0755)
-	os.WriteFile(r.path, data, 0644)
+func (r *Registry) save() error {
+	data, err := json.MarshalIndent(r.sessions, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(r.path), 0755); err != nil {
+		return err
+	}
+	return atomicWrite(r.path, data, 0644)
 }
 
 // ListAll returns all registered sessions.

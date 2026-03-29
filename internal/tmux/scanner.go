@@ -90,6 +90,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 }
 
 // resolveNodeAgent checks /proc to identify Gemini running under node.
+// Linux-only: silently returns false on macOS/other platforms.
 func resolveNodeAgent(pid string) (models.AgentType, bool) {
 	childrenPath := fmt.Sprintf("/proc/%s/task/%s/children", pid, pid)
 	data, err := os.ReadFile(childrenPath)

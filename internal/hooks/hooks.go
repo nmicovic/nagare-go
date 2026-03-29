@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -65,15 +66,18 @@ func ShouldNotify(newState, prevState string, workingSeconds, minWorkingSeconds 
 }
 
 // Handle reads a hook event from stdin and processes it.
+// Exits with code 1 on fatal errors so hook failures are visible.
 func Handle() {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return
+		fmt.Fprintf(os.Stderr, "nagare-go hook-state: failed to read stdin: %v\n", err)
+		os.Exit(1)
 	}
 
 	var event HookEvent
 	if err := json.Unmarshal(data, &event); err != nil {
-		return
+		fmt.Fprintf(os.Stderr, "nagare-go hook-state: invalid JSON: %v\n", err)
+		os.Exit(1)
 	}
 
 	newState := EventToState(event.HookEventName, event.NotificationType)

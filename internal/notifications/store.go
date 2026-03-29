@@ -44,13 +44,22 @@ func (s *Store) load() {
 		s.notifications = nil
 		return
 	}
-	json.Unmarshal(data, &s.notifications)
+	_ = json.Unmarshal(data, &s.notifications)
 }
 
-func (s *Store) save() {
-	data, _ := json.MarshalIndent(s.notifications, "", "  ")
-	os.MkdirAll(filepath.Dir(s.path), 0755)
-	os.WriteFile(s.path, data, 0644)
+func (s *Store) save() error {
+	data, err := json.MarshalIndent(s.notifications, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
 }
 
 const maxNotifications = 200

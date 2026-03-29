@@ -41,6 +41,7 @@ func SendBell() {
 
 // DetectOsNotifyCmd returns the best available OS notification command, or nil.
 func DetectOsNotifyCmd() []string {
+	// WSL
 	if os.Getenv("WSL_DISTRO_NAME") != "" {
 		if path, err := exec.LookPath("wsl-notify-send"); err == nil {
 			return []string{path}
@@ -48,21 +49,40 @@ func DetectOsNotifyCmd() []string {
 		return nil
 	}
 
+	// Linux
 	if path, err := exec.LookPath("notify-send"); err == nil {
 		return []string{path}
+	}
+
+	// macOS
+	if path, err := exec.LookPath("osascript"); err == nil {
+		return []string{path, "-e"}
 	}
 
 	return nil
 }
 
 // SendOsNotify sends a native OS notification.
-func SendOsNotify(title, message string) {
+func sendOsNotifyArgs(title, message string) (string, []string) {
 	cmd := DetectOsNotifyCmd()
 	if cmd == nil {
+		return "", nil
+	}
+	// osascript needs a different invocation
+	if strings.Contains(cmd[0], "osascript") {
+		script := fmt.Sprintf(`display notification "%s" with title "%s"`, message, title)
+		return cmd[0], []string{"-e", script}
+	}
+	return cmd[0], []string{title, message}
+}
+
+// SendOsNotify sends a native OS notification.
+func SendOsNotify(title, message string) {
+	bin, args := sendOsNotifyArgs(title, message)
+	if bin == "" {
 		return
 	}
-	args := append(cmd, title, message)
-	exec.Command(args[0], args[1:]...).Start()
+	exec.Command(bin, args...).Start()
 }
 
 // Deliver dispatches a pre-built message through the enabled channels.

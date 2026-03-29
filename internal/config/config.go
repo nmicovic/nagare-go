@@ -89,6 +89,9 @@ func DefaultPath() string {
 }
 
 // LoadFrom loads config from a specific path. Returns defaults if file doesn't exist.
+// Uses a two-pass approach: first decode into a raw map to see which sections were
+// specified, then only override defaults for sections that are present. This prevents
+// a partial [notifications.needs_input] from zeroing out unspecified fields.
 func LoadFrom(path string) (NagareConfig, error) {
 	cfg := Default()
 
@@ -100,10 +103,86 @@ func LoadFrom(path string) (NagareConfig, error) {
 		return cfg, err
 	}
 
-	if _, err := toml.Decode(string(data), &cfg); err != nil {
+	// First pass: decode into raw map to detect which keys are present
+	var raw map[string]interface{}
+	if _, err := toml.Decode(string(data), &raw); err != nil {
 		return cfg, err
 	}
+
+	// Second pass: decode into a zero-value struct
+	var parsed NagareConfig
+	if _, err := toml.Decode(string(data), &parsed); err != nil {
+		return cfg, err
+	}
+
+	// Merge top-level fields
+	if notifRaw, ok := raw["notifications"]; ok {
+		notifMap, _ := notifRaw.(map[string]interface{})
+		if _, ok := notifMap["enabled"]; ok {
+			cfg.Notifications.Enabled = parsed.Notifications.Enabled
+		}
+		if _, ok := notifMap["needs_input"]; ok {
+			cfg.Notifications.NeedsInput = mergeEventConfig(cfg.Notifications.NeedsInput, parsed.Notifications.NeedsInput, notifMap["needs_input"])
+		}
+		if _, ok := notifMap["task_complete"]; ok {
+			cfg.Notifications.TaskComplete = mergeEventConfig(cfg.Notifications.TaskComplete, parsed.Notifications.TaskComplete, notifMap["task_complete"])
+		}
+	}
+	if _, ok := raw["picker"]; ok {
+		cfg.Picker = parsed.Picker
+	}
+	if _, ok := raw["appearance"]; ok {
+		cfg.Appearance = mergeAppearance(cfg.Appearance, parsed.Appearance, raw["appearance"])
+	}
+	if _, ok := raw["notification_duration"]; ok {
+		cfg.NotificationDuration = parsed.NotificationDuration
+	}
+
 	return cfg, nil
+}
+
+// mergeEventConfig merges only the fields that were specified in the TOML.
+func mergeEventConfig(defaults, parsed NotificationEventConfig, rawVal interface{}) NotificationEventConfig {
+	m, ok := rawVal.(map[string]interface{})
+	if !ok {
+		return defaults
+	}
+	result := defaults
+	if _, ok := m["toast"]; ok {
+		result.Toast = parsed.Toast
+	}
+	if _, ok := m["bell"]; ok {
+		result.Bell = parsed.Bell
+	}
+	if _, ok := m["os_notify"]; ok {
+		result.OsNotify = parsed.OsNotify
+	}
+	if _, ok := m["popup"]; ok {
+		result.Popup = parsed.Popup
+	}
+	if _, ok := m["popup_timeout"]; ok {
+		result.PopupTimeout = parsed.PopupTimeout
+	}
+	if _, ok := m["min_working_seconds"]; ok {
+		result.MinWorkingSeconds = parsed.MinWorkingSeconds
+	}
+	return result
+}
+
+// mergeAppearance merges only specified appearance fields.
+func mergeAppearance(defaults, parsed AppearanceConfig, rawVal interface{}) AppearanceConfig {
+	m, ok := rawVal.(map[string]interface{})
+	if !ok {
+		return defaults
+	}
+	result := defaults
+	if _, ok := m["theme"]; ok {
+		result.Theme = parsed.Theme
+	}
+	if _, ok := m["icon_style"]; ok {
+		result.IconStyle = parsed.IconStyle
+	}
+	return result
 }
 
 // Load loads config from the default path.

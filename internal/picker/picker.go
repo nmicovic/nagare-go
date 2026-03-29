@@ -102,13 +102,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
-	if m.searchMode {
-		var cmd tea.Cmd
-		m.searchInput, cmd = m.searchInput.Update(msg)
-		m.applyFilter()
-		return m, cmd
-	}
-
 	return m, nil
 }
 
@@ -117,12 +110,12 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	leftWidth := m.width*2/5 - 2
-	rightWidth := m.width - leftWidth - 5
-	contentHeight := m.height - 2
+	// Split terminal: 40% left, 60% right
+	leftOuter := m.width * 2 / 5
+	rightOuter := m.width - leftOuter
 
-	left := m.viewLeft(leftWidth, contentHeight)
-	right := m.viewRight(rightWidth, contentHeight)
+	left := m.viewLeft(leftOuter, m.height)
+	right := m.viewRight(rightOuter, m.height)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 }
@@ -282,7 +275,13 @@ func statusOrder(s models.SessionStatus) int {
 
 // --- View rendering ---
 
-func (m Model) viewLeft(width, height int) string {
+func (m Model) viewLeft(outerWidth, outerHeight int) string {
+	// Border takes 2 chars width, padding 1 each side = 4 total horizontal
+	innerWidth := outerWidth - 4
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
 	var b strings.Builder
 
 	// Dashboard stats
@@ -297,31 +296,34 @@ func (m Model) viewLeft(width, height int) string {
 			running++
 		}
 	}
-	stats := m.styles.Muted.Render(fmt.Sprintf(" %d sessions | %d waiting | %d running", total, waiting, running))
-	b.WriteString(stats)
+	b.WriteString(m.styles.Muted.Render(fmt.Sprintf(" %d sessions | %d waiting | %d running", total, waiting, running)))
 	b.WriteString("\n\n")
 
 	// Search input
 	if m.searchMode {
-		b.WriteString(m.styles.SearchInput.Width(width).Render(m.searchInput.View()))
+		b.WriteString(m.searchInput.View())
 	} else {
 		b.WriteString(m.styles.Muted.Render(" / to search"))
 	}
 	b.WriteString("\n\n")
 
 	// Session list
-	listHeight := height - 6
+	// border top/bottom = 2, padding top/bottom = 2, stats = 2 lines, search = 2 lines
+	listHeight := outerHeight - 10
 	if listHeight < 1 {
 		listHeight = 1
 	}
 
 	if m.viewMode == ListView {
-		b.WriteString(m.renderListView(width, listHeight))
+		b.WriteString(m.renderListView(innerWidth, listHeight))
 	} else {
-		b.WriteString(m.renderGridView(width, listHeight))
+		b.WriteString(m.renderGridView(innerWidth, listHeight))
 	}
 
-	return m.styles.SessionList.Width(width).Height(height).Render(b.String())
+	return m.styles.SessionList.
+		Width(outerWidth).
+		Height(outerHeight).
+		Render(b.String())
 }
 
 func (m Model) renderListView(width, height int) string {
@@ -348,8 +350,12 @@ func (m Model) renderListView(width, height int) string {
 			Render(models.AgentLabel(s.AgentType))
 
 		name := s.Name
-		if len(name) > width-20 {
-			name = name[:width-20] + "..."
+		maxName := width - 20
+		if maxName < 5 {
+			maxName = 5
+		}
+		if len(name) > maxName {
+			name = name[:maxName] + "..."
 		}
 
 		line := fmt.Sprintf(" %s %s  %s", statusDot, name, agentBadge)
@@ -400,11 +406,18 @@ func (m Model) renderGridView(width, height int) string {
 	return strings.Join(rows, "\n")
 }
 
-func (m Model) viewRight(width, height int) string {
+func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
-		return m.styles.DetailPanel.Width(width).Height(height).Render(
-			m.styles.Muted.Render("No session selected"),
-		)
+		return m.styles.DetailPanel.
+			Width(outerWidth).
+			Height(outerHeight).
+			Render(m.styles.Muted.Render("No session selected"))
+	}
+
+	// Inner width after border (2) + padding (2) = 4
+	innerWidth := outerWidth - 4
+	if innerWidth < 10 {
+		innerWidth = 10
 	}
 
 	s := m.filtered[m.cursor]
@@ -433,23 +446,92 @@ func (m Model) viewRight(width, height int) string {
 		detail.WriteString(fmt.Sprintf("  Context  %s\n", m.styles.Muted.Render(s.Details.ContextUsage)))
 	}
 
-	detailHeight := height / 3
-	detailStr := m.styles.DetailPanel.Width(width).Height(detailHeight).Render(detail.String())
+	detailHeight := outerHeight / 3
+	detailStr := m.styles.DetailPanel.
+		Width(outerWidth).
+		Height(detailHeight).
+		Render(detail.String())
 
 	// Preview section
-	previewHeight := height - detailHeight - 2
+	previewHeight := outerHeight - detailHeight
+	if previewHeight < 3 {
+		previewHeight = 3
+	}
+
 	previewContent := m.preview
 	if previewContent == "" {
 		previewContent = m.styles.Muted.Render("No preview available")
 	} else {
-		// Trim to fit
+		// Truncate each line to inner width and limit line count.
+		// Preview comes from tmux capture-pane which can return lines
+		// as wide as the captured pane — we must truncate to fit.
+		maxLines := previewHeight - 4 // border (2) + padding (0..1)
+		if maxLines < 1 {
+			maxLines = 1
+		}
 		lines := strings.Split(previewContent, "\n")
-		if len(lines) > previewHeight-2 {
-			lines = lines[len(lines)-previewHeight+2:]
+		if len(lines) > maxLines {
+			lines = lines[len(lines)-maxLines:]
+		}
+		for i, line := range lines {
+			if runeLen(line) > innerWidth {
+				lines[i] = truncateLine(line, innerWidth)
+			}
 		}
 		previewContent = strings.Join(lines, "\n")
 	}
-	previewStr := m.styles.PreviewPanel.Width(width).Height(previewHeight).Render(previewContent)
+
+	previewStr := m.styles.PreviewPanel.
+		Width(outerWidth).
+		Height(previewHeight).
+		Render(previewContent)
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
+}
+
+// truncateLine truncates a string to maxWidth runes, stripping ANSI sequences from width count.
+func truncateLine(s string, maxWidth int) string {
+	width := 0
+	inEscape := false
+	result := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' {
+			inEscape = true
+			result = append(result, s[i])
+			continue
+		}
+		if inEscape {
+			result = append(result, s[i])
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		if width >= maxWidth {
+			break
+		}
+		result = append(result, s[i])
+		width++
+	}
+	return string(result)
+}
+
+// runeLen returns the visible width of a string, ignoring ANSI escape sequences.
+func runeLen(s string) int {
+	width := 0
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		width++
+	}
+	return width
 }

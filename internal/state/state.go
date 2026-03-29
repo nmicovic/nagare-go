@@ -78,7 +78,7 @@ func LoadStateByID(dir, sessionID string) (models.SessionState, bool) {
 	return s, true
 }
 
-// WriteState writes a session state to dir/{session_id}.json.
+// WriteState writes a session state to dir/{session_id}.json atomically.
 func WriteState(dir string, s models.SessionState) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -90,5 +90,14 @@ func WriteState(dir string, s models.SessionState) error {
 	}
 
 	path := filepath.Join(dir, s.SessionID+".json")
-	return os.WriteFile(path, data, 0644)
+	return atomicWrite(path, data, 0644)
+}
+
+// atomicWrite writes data to a temp file and renames it into place.
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

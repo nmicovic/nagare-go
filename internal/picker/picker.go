@@ -467,7 +467,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Last  "), mutedStyle().Render(msg)))
 	}
 
-	detailHeight := outerHeight / 3
+	detailHeight := outerHeight / 5
 	detailStr := panelStyle().
 		Width(outerWidth).
 		Height(detailHeight).

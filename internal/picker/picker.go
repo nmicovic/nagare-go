@@ -454,11 +454,17 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if s.Details.GitBranch != "" {
 		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))
 	}
-	if s.Details.Model != "" {
-		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Model "), val.Render(s.Details.Model)))
+	if s.Details.LastActivity != "" {
+		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))
 	}
-	if s.Details.ContextUsage != "" {
-		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Ctx   "), val.Render(s.Details.ContextUsage)))
+	if s.LastMessage != "" {
+		// Truncate long messages
+		msg := s.LastMessage
+		maxLen := innerWidth - 12
+		if maxLen > 0 && len(msg) > maxLen {
+			msg = msg[:maxLen] + "..."
+		}
+		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Last  "), mutedStyle().Render(msg)))
 	}
 
 	detailHeight := outerHeight / 3
@@ -499,4 +505,23 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		Render(previewContent)
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
+}
+
+// formatTimeAgo converts an ISO 8601 timestamp to a human-readable relative time.
+func formatTimeAgo(ts string) string {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ts
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh %dm ago", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }

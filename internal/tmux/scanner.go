@@ -3,6 +3,7 @@ package tmux
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -116,6 +117,16 @@ func resolveNodeAgent(pid string) (models.AgentType, bool) {
 	return "", false
 }
 
+// gitBranch returns the current git branch for a directory, or "".
+func gitBranch(dir string) string {
+	cmd := exec.Command("git", "-C", dir, "branch", "--show-current")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // hookStateMap maps hook state strings to SessionStatus.
 var hookStateMap = map[string]models.SessionStatus{
 	"working":       models.StatusRunning,
@@ -154,11 +165,14 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 					status = models.StatusIdle
 				}
 				lastMessage = hookState.LastMessage
+				details.LastActivity = hookState.Timestamp
+				details.LastEvent = hookState.Event
 			} else {
-				// Without hook state, default to Idle. The picker captures
-				// pane content separately for the selected session's preview.
 				status = models.StatusIdle
 			}
+
+			// Get git branch from working directory
+			details.GitBranch = gitBranch(sess.Path)
 
 			result = append(result, models.Session{
 				Name:        sess.Name,

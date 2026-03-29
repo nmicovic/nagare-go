@@ -28,11 +28,13 @@ const (
 	AgentUnknown AgentType = "unknown"
 )
 
-// SessionDetails holds metadata extracted from pane content.
+// SessionDetails holds metadata about a session.
 type SessionDetails struct {
 	GitBranch    string
 	Model        string
 	ContextUsage string
+	LastActivity string // ISO 8601 timestamp of last hook event
+	LastEvent    string // last hook event name (e.g. "Stop", "UserPromptSubmit")
 }
 
 // Session represents a discovered agent pane in tmux.

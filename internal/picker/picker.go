@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/sahilm/fuzzy"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tmux"
@@ -138,6 +139,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case keyEnter:
 			m.searchMode = false
 			m.searchInput.Blur()
+			// Jump to the selected session
+			if len(m.filtered) > 0 {
+				s := m.filtered[m.cursor]
+				target := fmt.Sprintf("%s:%d", s.Name, s.WindowIndex)
+				tmux.RunTmux("switch-client", "-t", target)
+				return m, tea.Quit
+			}
 			return m, nil
 		default:
 			var cmd tea.Cmd
@@ -225,21 +233,27 @@ func (m Model) doPreview() tea.Cmd {
 // --- Filtering & sorting ---
 
 func (m *Model) applyFilter() {
-	query := strings.ToLower(m.searchInput.Value())
+	query := m.searchInput.Value()
 	if query == "" {
 		m.filtered = make([]models.Session, len(m.sessions))
 		copy(m.filtered, m.sessions)
+		m.sortFiltered()
 	} else {
-		m.filtered = m.filtered[:0]
-		for _, s := range m.sessions {
-			if strings.Contains(strings.ToLower(s.Name), query) ||
-				strings.Contains(strings.ToLower(s.Path), query) {
-				m.filtered = append(m.filtered, s)
-			}
+		// Build search targets: "name path" for each session
+		targets := make([]string, len(m.sessions))
+		for i, s := range m.sessions {
+			targets[i] = s.Name + " " + s.Path
 		}
-	}
 
-	m.sortFiltered()
+		matches := fuzzy.Find(query, targets)
+		m.filtered = make([]models.Session, len(matches))
+		for i, match := range matches {
+			m.filtered[i] = m.sessions[match.Index]
+		}
+		// fuzzy.Find returns results sorted by score (best first)
+		// so cursor 0 = best match
+		m.cursor = 0
+	}
 
 	if m.cursor >= len(m.filtered) {
 		m.cursor = max(0, len(m.filtered)-1)

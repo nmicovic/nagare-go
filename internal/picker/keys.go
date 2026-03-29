@@ -18,4 +18,7 @@ const (
 	keyRename        = "f2"
 	keyNewSession    = "ctrl+n"
 	keyQuickProto    = "ctrl+r"
+	keyInlinePrompt  = "ctrl+l"
+	keyEditPrompt    = "ctrl+g"
+	keyEditConfig    = "ctrl+e"
 )

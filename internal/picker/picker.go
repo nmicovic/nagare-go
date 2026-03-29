@@ -2,6 +2,9 @@ package picker
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -82,6 +85,9 @@ type Model struct {
 	renameMode    bool
 	renameSession models.Session
 	result        Result
+	promptMode    bool
+	promptTarget  models.Session
+	promptInput   textinput.Model
 }
 
 // New creates a new picker model with default settings.
@@ -93,6 +99,11 @@ func New() Model {
 
 	ti.Focus()
 
+	pi := textinput.New()
+	pi.Placeholder = "type prompt to send..."
+	pi.CharLimit = 500
+	pi.Width = 60
+
 	cfg, _ := config.Load()
 
 	return Model{
@@ -100,6 +111,7 @@ func New() Model {
 		searchInput: ti,
 		showHelpBar: cfg.Picker.ShowHelpBar,
 		registry:    state.NewRegistry(state.DefaultRegistryPath()),
+		promptInput: pi,
 	}
 }
 
@@ -169,6 +181,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case editorDoneMsg:
+		defer os.Remove(msg.path)
+		if msg.err != nil {
+			log.Error("editor prompt failed: %v", msg.err)
+			return m, nil
+		}
+		data, err := os.ReadFile(msg.path)
+		if err != nil {
+			log.Error("editor prompt read: %v", err)
+			return m, nil
+		}
+		text := strings.TrimSpace(string(data))
+		if text != "" {
+			sendPromptToPane(m.promptTarget, text)
+			log.Info("editor prompt sent to %s", m.promptTarget.Name)
+		}
+		return m, nil
+
+	case configEditDoneMsg:
+		if msg.err != nil {
+			log.Error("config editor failed: %v", msg.err)
+		}
+		// Config may have changed — reload theme
+		if cfg, err := config.Load(); err == nil {
+			theme.Set(cfg.Appearance.Theme)
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -209,8 +249,23 @@ func (m Model) View() string {
 		overlay := themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height)
 		return placeOverlay(m.width, m.height, overlay, base)
 	}
+	if m.promptMode {
+		overlay := m.renderPromptOverlay()
+		return placeOverlay(m.width, m.height, overlay, base)
+	}
 
 	return base
+}
+
+// renderPromptOverlay renders the inline prompt dialog.
+func (m Model) renderPromptOverlay() string {
+	c := theme.Current().Colors
+	title := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).
+		Render("Send to: " + m.promptTarget.Name)
+	hint := lipgloss.NewStyle().Foreground(c.Muted).
+		Render("Enter send  Esc cancel")
+	content := title + "\n\n" + m.promptInput.View() + "\n\n" + hint
+	return dialogStyle().Padding(1, 2).Render(content)
 }
 
 // --- Key handling ---
@@ -227,6 +282,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Rename mode intercepts keys before normal handling
 	if m.renameMode {
 		return m.handleRenameKey(msg)
+	}
+
+	// Prompt mode intercepts keys
+	if m.promptMode {
+		return m.handlePromptKey(msg)
 	}
 
 	switch key {
@@ -366,6 +426,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyQuickProto:
 		m.result = Result{Action: ActionQuickProto}
 		return m, tea.Quit
+	case keyInlinePrompt:
+		if s, ok := m.selectedSession(); ok {
+			m.promptMode = true
+			m.promptTarget = s
+			m.promptInput.SetValue("")
+			m.promptInput.Focus()
+		}
+		return m, nil
+	case keyEditPrompt:
+		if s, ok := m.selectedSession(); ok {
+			m.promptTarget = s
+			return m, m.openEditorPrompt()
+		}
+		return m, nil
+	case keyEditConfig:
+		return m, m.openConfigEditor()
 	default:
 		// All other keys go to search input
 		var cmd tea.Cmd
@@ -441,6 +517,103 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		return m, cmd
 	}
+}
+
+// handlePromptKey handles key input during prompt mode.
+func (m Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case keyEscape:
+		m.promptMode = false
+		return m, nil
+	case keyEnter:
+		text := strings.TrimSpace(m.promptInput.Value())
+		if text != "" {
+			sendPromptToPane(m.promptTarget, text)
+			log.Info("prompt sent to %s", m.promptTarget.Name)
+		}
+		m.promptMode = false
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.promptInput, cmd = m.promptInput.Update(msg)
+		return m, cmd
+	}
+}
+
+// sendPromptToPane sends text to a session's tmux pane.
+func sendPromptToPane(s models.Session, text string) {
+	target := tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex)
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if i < len(lines)-1 {
+			// Intermediate lines: send text then Enter separately
+			tmux.RunTmux("send-keys", "-t", target, line, "")
+			tmux.RunTmux("send-keys", "-t", target, "Enter", "")
+		} else {
+			// Last line: send with Enter to execute
+			tmux.RunTmux("send-keys", "-t", target, line, "Enter")
+		}
+	}
+}
+
+// editorDoneMsg is sent when the editor process completes.
+type editorDoneMsg struct {
+	path string
+	err  error
+}
+
+// configEditDoneMsg is sent when the config editor process completes.
+type configEditDoneMsg struct {
+	err error
+}
+
+func resolveEditor() string {
+	if e := os.Getenv("EDITOR"); e != "" {
+		return e
+	}
+	if e := os.Getenv("VISUAL"); e != "" {
+		return e
+	}
+	return "vi"
+}
+
+// openEditorPrompt opens $EDITOR with a temp file for composing a prompt.
+func (m Model) openEditorPrompt() tea.Cmd {
+	editor := resolveEditor()
+
+	// Create temp file
+	tmpFile, err := os.CreateTemp("", "nagare-prompt-*.md")
+	if err != nil {
+		log.Error("editor prompt: %v", err)
+		return nil
+	}
+	tmpFile.Close()
+	tmpPath := tmpFile.Name()
+
+	c := exec.Command(editor, tmpPath)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorDoneMsg{path: tmpPath, err: err}
+	})
+}
+
+// openConfigEditor opens $EDITOR with the config file.
+func (m Model) openConfigEditor() tea.Cmd {
+	editor := resolveEditor()
+
+	cfgPath := config.DefaultPath()
+	// Ensure file exists
+	os.MkdirAll(filepath.Dir(cfgPath), 0755)
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		// Write defaults
+		cfg := config.Default()
+		config.Save(cfg)
+	}
+
+	c := exec.Command(editor, cfgPath)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return configEditDoneMsg{err: err}
+	})
 }
 
 // --- Commands ---

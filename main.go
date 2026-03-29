@@ -9,9 +9,11 @@ import (
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/log"
+	"github.com/nemke/nagare-go/internal/newsession"
 	"github.com/nemke/nagare-go/internal/notifs"
 	"github.com/nemke/nagare-go/internal/picker"
 	"github.com/nemke/nagare-go/internal/popup"
+	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/setup"
 	"github.com/nemke/nagare-go/internal/theme"
 )
@@ -34,9 +36,37 @@ func main() {
 		Use:   "pick",
 		Short: "Launch session picker TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := tea.NewProgram(picker.New(), tea.WithAltScreen())
-			_, err := p.Run()
-			return err
+			for {
+				m := picker.New()
+				p := tea.NewProgram(m, tea.WithAltScreen())
+				result, err := p.Run()
+				if err != nil {
+					return err
+				}
+
+				pickerModel, ok := result.(picker.Model)
+				if !ok {
+					return nil
+				}
+
+				switch pickerModel.Result().Action {
+				case "new":
+					form := tea.NewProgram(newsession.New(), tea.WithAltScreen())
+					if _, err := form.Run(); err != nil {
+						return err
+					}
+					// Loop back to picker after form closes
+					continue
+				case "quickproto":
+					form := tea.NewProgram(newsession.NewQuick(), tea.WithAltScreen())
+					if _, err := form.Run(); err != nil {
+						return err
+					}
+					continue
+				default:
+					return nil
+				}
+			}
 		},
 	}
 
@@ -55,6 +85,35 @@ func main() {
 			return setup.Run()
 		},
 	}
+
+	newCmd := &cobra.Command{
+		Use:   "new [path]",
+		Short: "Create a new agent session",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			agent, _ := cmd.Flags().GetString("agent")
+			name, _ := cmd.Flags().GetString("name")
+			cont, _ := cmd.Flags().GetBool("continue")
+
+			if len(args) == 0 {
+				// No path: launch interactive form
+				p := tea.NewProgram(newsession.New(), tea.WithAltScreen())
+				_, err := p.Run()
+				return err
+			}
+
+			// Direct creation
+			sessionName, err := session.Create(args[0], name, agent, cont)
+			if err != nil {
+				return err
+			}
+			session.SwitchToSession(sessionName)
+			return nil
+		},
+	}
+	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, opencode, gemini)")
+	newCmd.Flags().StringP("name", "n", "", "Session name (default: path basename)")
+	newCmd.Flags().BoolP("continue", "c", true, "Continue previous session")
 
 	notifsCmd := &cobra.Command{
 		Use:   "notifs",
@@ -86,7 +145,7 @@ func main() {
 	popupNotifCmd.Flags().Int("timeout", 10, "Auto-dismiss timeout in seconds")
 	popupNotifCmd.Flags().Int("duration", 0, "Working seconds (for task_complete)")
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd)
+	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

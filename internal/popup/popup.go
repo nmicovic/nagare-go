@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
@@ -92,7 +93,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return m, tea.Quit
 	case "enter":
-		tmux.RunTmux("switch-client", "-t", m.sessionName)
+		session.SwitchToSession(m.sessionName)
 		return m, tea.Quit
 	case "ctrl+y":
 		if m.eventType == "needs_input" {

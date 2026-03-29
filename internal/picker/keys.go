@@ -16,4 +16,6 @@ const (
 	keyStar          = "ctrl+f"
 	keyCycleSort     = "ctrl+o"
 	keyRename        = "f2"
+	keyNewSession    = "ctrl+n"
+	keyQuickProto    = "ctrl+r"
 )

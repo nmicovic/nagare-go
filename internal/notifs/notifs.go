@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/notifications"
+	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/theme"
-	"github.com/nemke/nagare-go/internal/tmux"
 )
 
 // Model is the Bubble Tea model for the notification center TUI.
@@ -150,7 +150,7 @@ func (m Model) handleNotificationEnter() (tea.Model, tea.Cmd) {
 	m.items = m.store.ListAll()
 
 	// Jump to session
-	tmux.RunTmux("switch-client", "-t", item.SessionName)
+	session.SwitchToSession(item.SessionName)
 	return m, tea.Quit
 }
 

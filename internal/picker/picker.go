@@ -14,6 +14,7 @@ import (
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tmux"
@@ -45,6 +46,12 @@ type tickScanMsg struct{}
 type tickPreviewMsg struct{}
 type gridPreviewsMsg map[string]string
 
+// Result is returned when the picker exits with a special action.
+type Result struct {
+	Action string // "jump", "new", "quickproto", ""
+	Target string // session name for jump
+}
+
 // Model is the main Bubble Tea model for the picker TUI.
 type Model struct {
 	sessions      []models.Session
@@ -67,6 +74,7 @@ type Model struct {
 	registry      *state.Registry
 	renameMode    bool
 	renameSession models.Session
+	result        Result
 }
 
 // New creates a new picker model with default settings.
@@ -91,7 +99,7 @@ func New() Model {
 // markDead writes a dead state for a session before killing it.
 func markDead(s models.Session, statesDir string) {
 	state.WriteState(statesDir, models.SessionState{
-		State:     "dead",
+		State:     string(models.StatusDead),
 		SessionID: s.SessionID,
 		Cwd:       s.Path,
 		Event:     "ManualKill",
@@ -111,6 +119,11 @@ func (m Model) selectedSession() (models.Session, bool) {
 func (m Model) isStarred(name string) bool {
 	s := m.registry.Find(name)
 	return s != nil && s.Starred
+}
+
+// Result returns the picker's result (action to take after quitting).
+func (m Model) Result() Result {
+	return m.result
 }
 
 func (m Model) Init() tea.Cmd {
@@ -222,8 +235,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyEnter:
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
-			target := fmt.Sprintf("%s:%d", s.Name, s.WindowIndex)
-			tmux.RunTmux("switch-client", "-t", target)
+			session.SwitchToSession(s.Name)
 			return m, tea.Quit
 		}
 	case keyUp:
@@ -341,6 +353,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.CursorEnd()
 		}
 		return m, nil
+	case keyNewSession:
+		m.result = Result{Action: "new"}
+		return m, tea.Quit
+	case keyQuickProto:
+		m.result = Result{Action: "quickproto"}
+		return m, tea.Quit
 	default:
 		// All other keys go to search input
 		var cmd tea.Cmd

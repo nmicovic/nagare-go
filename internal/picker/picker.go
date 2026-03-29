@@ -47,23 +47,26 @@ type gridPreviewsMsg map[string]string
 
 // Model is the main Bubble Tea model for the picker TUI.
 type Model struct {
-	sessions    []models.Session
-	filtered    []models.Session
-	cursor      int
-	viewMode    ViewMode
-	sortMode    SortMode
-	preview     string
-	width       int
-	height      int
-	statesDir   string
-	searchInput    textinput.Model
-	showHelp       bool // F1 help overlay
-	showHelpBar    bool // bottom hint bar
-	showThemePick  bool     // Ctrl+t theme picker overlay
-	themeNames     []string // cached sorted theme names
-	themeCursor    int      // cursor in theme picker
-	themeOriginal  string   // theme before opening picker (for cancel)
-	gridPreviews   map[string]string // cached grid cell previews keyed by pane target
+	sessions      []models.Session
+	filtered      []models.Session
+	cursor        int
+	viewMode      ViewMode
+	sortMode      SortMode
+	preview       string
+	width         int
+	height        int
+	statesDir     string
+	searchInput   textinput.Model
+	showHelp      bool              // F1 help overlay
+	showHelpBar   bool              // bottom hint bar
+	showThemePick bool              // Ctrl+t theme picker overlay
+	themeNames    []string          // cached sorted theme names
+	themeCursor   int               // cursor in theme picker
+	themeOriginal string            // theme before opening picker (for cancel)
+	gridPreviews  map[string]string // cached grid cell previews keyed by pane target
+	registry      *state.Registry
+	renameMode    bool
+	renameSession models.Session
 }
 
 // New creates a new picker model with default settings.
@@ -81,7 +84,33 @@ func New() Model {
 		statesDir:   state.DefaultStatesDir(),
 		searchInput: ti,
 		showHelpBar: cfg.Picker.ShowHelpBar,
+		registry:    state.NewRegistry(state.DefaultRegistryPath()),
 	}
+}
+
+// markDead writes a dead state for a session before killing it.
+func markDead(s models.Session, statesDir string) {
+	state.WriteState(statesDir, models.SessionState{
+		State:     "dead",
+		SessionID: s.SessionID,
+		Cwd:       s.Path,
+		Event:     "ManualKill",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// selectedSession returns the currently selected session, if any.
+func (m Model) selectedSession() (models.Session, bool) {
+	if len(m.filtered) == 0 || m.cursor >= len(m.filtered) {
+		return models.Session{}, false
+	}
+	return m.filtered[m.cursor], true
+}
+
+// isStarred returns whether a session is starred in the registry.
+func (m Model) isStarred(name string) bool {
+	s := m.registry.Find(name)
+	return s != nil && s.Starred
 }
 
 func (m Model) Init() tea.Cmd {
@@ -175,6 +204,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleThemePickKey(key)
 	}
 
+	// Rename mode intercepts keys before normal handling
+	if m.renameMode {
+		return m.handleRenameKey(msg)
+	}
+
 	switch key {
 	case keyHelp:
 		m.showHelp = !m.showHelp
@@ -244,15 +278,67 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyApprove:
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "y", "Enter")
+		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "Enter")
+			log.Info("approved %s", s.Name)
 		}
 		return m, nil
 	case keyApproveAlways:
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "a", "Enter")
+		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "Down", "Enter")
+			log.Info("approved always %s", s.Name)
+		}
+		return m, nil
+	case keyUnload:
+		if s, ok := m.selectedSession(); ok {
+			markDead(s, m.statesDir)
+			tmux.RunTmux("kill-pane", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex))
+			log.Info("unloaded pane %s", s.Name)
+			return m, doScan(m.statesDir)
+		}
+		return m, nil
+	case keyKillSession:
+		if s, ok := m.selectedSession(); ok {
+			markDead(s, m.statesDir)
+			tmux.RunTmux("kill-session", "-t", s.Name)
+			log.Info("killed session %s", s.Name)
+			return m, doScan(m.statesDir)
+		}
+		return m, nil
+	case keyStar:
+		if s, ok := m.selectedSession(); ok {
+			// Auto-register if not in registry
+			if m.registry.Find(s.Name) == nil {
+				m.registry.Register(s.Name, s.Path, string(s.AgentType))
+			}
+			starred := m.registry.ToggleStar(s.Name)
+			if starred {
+				log.Info("starred %s", s.Name)
+			} else {
+				log.Info("unstarred %s", s.Name)
+			}
+			// Refresh registry after toggle
+			m.registry = state.NewRegistry(state.DefaultRegistryPath())
+		}
+		return m, nil
+	case keyCycleSort:
+		switch m.sortMode {
+		case SortByStatus:
+			m.sortMode = SortByName
+		case SortByName:
+			m.sortMode = SortByAgent
+		case SortByAgent:
+			m.sortMode = SortByStatus
+		}
+		m.applyFilter()
+		log.Info("sort mode: %d", m.sortMode)
+		return m, nil
+	case keyRename:
+		if s, ok := m.selectedSession(); ok {
+			m.renameMode = true
+			m.renameSession = s
+			m.searchInput.SetValue(s.Name)
+			m.searchInput.CursorEnd()
 		}
 		return m, nil
 	default:
@@ -264,6 +350,72 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// handleRenameKey handles key input during rename mode.
+func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case keyEscape:
+		// Cancel rename
+		m.renameMode = false
+		m.searchInput.SetValue("")
+		return m, nil
+	case keyEnter:
+		// Finish rename
+		newName := strings.TrimSpace(m.searchInput.Value())
+		m.renameMode = false
+		m.searchInput.SetValue("")
+
+		if newName == "" || newName == m.renameSession.Name {
+			return m, nil
+		}
+
+		oldName := m.renameSession.Name
+
+		// Check if name already exists
+		existing := tmux.RunTmux("list-sessions", "-F", "#{session_name}")
+		for _, line := range strings.Split(existing, "\n") {
+			if strings.TrimSpace(line) == newName {
+				log.Info("rename failed: %s already exists", newName)
+				return m, nil
+			}
+		}
+
+		// Count sessions with same name (multi-agent check)
+		count := 0
+		for _, s := range m.sessions {
+			if s.Name == oldName {
+				count++
+			}
+		}
+
+		if count > 1 {
+			// Rename just the window
+			target := fmt.Sprintf("%s:%d", oldName, m.renameSession.WindowIndex)
+			tmux.RunTmux("rename-window", "-t", target, newName)
+			log.Info("renamed window %s -> %s", target, newName)
+		} else {
+			// Rename the tmux session
+			tmux.RunTmux("rename-session", "-t", oldName, newName)
+			log.Info("renamed session %s -> %s", oldName, newName)
+
+			// Update registry
+			if existing := m.registry.Find(oldName); existing != nil {
+				path := existing.Path
+				agent := existing.Agent
+				m.registry.Remove(oldName)
+				m.registry.Register(newName, path, agent)
+			}
+		}
+
+		return m, doScan(m.statesDir)
+	default:
+		// Forward to search input for text editing
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
 }
 
 // --- Commands ---
@@ -338,7 +490,18 @@ func (m *Model) applyFilter() {
 }
 
 func (m *Model) sortFiltered() {
+	// Pre-build starred set to avoid per-comparison registry lookups
+	starred := make(map[string]bool)
+	for _, s := range m.filtered {
+		starred[s.Name] = m.isStarred(s.Name)
+	}
+
 	sort.SliceStable(m.filtered, func(i, j int) bool {
+		si := starred[m.filtered[i].Name]
+		sj := starred[m.filtered[j].Name]
+		if si != sj {
+			return si
+		}
 		switch m.sortMode {
 		case SortByName:
 			return m.filtered[i].Name < m.filtered[j].Name
@@ -391,6 +554,11 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	b.WriteString("\n\n")
 
 	// Search input (always active)
+	if m.renameMode {
+		m.searchInput.Prompt = " Rename: "
+	} else {
+		m.searchInput.Prompt = " > "
+	}
 	b.WriteString(m.searchInput.View())
 	b.WriteString("\n\n")
 
@@ -448,10 +616,13 @@ func (m Model) renderListView(width, height int) string {
 			name = string(runes[:maxName]) + "..."
 		}
 
+		star := ""
+		if m.isStarred(s.Name) {
+			star = " ★"
+		}
+
 		var line string
 		if i == m.cursor {
-			// Selected: single style for entire line — no inner Render() calls
-			// to avoid ANSI resets killing the background
 			agentChar := string(models.AgentLabel(s.AgentType)[0])
 			line = lipgloss.NewStyle().
 				Background(c.Primary).
@@ -459,10 +630,11 @@ func (m Model) renderListView(width, height int) string {
 				Bold(true).
 				PaddingLeft(1).
 				Width(width).
-				Render(fmt.Sprintf("> ● %s  %s", name, agentChar))
+				Render(fmt.Sprintf("> ● %s  %s%s", name, agentChar, star))
 		} else {
 			nameStyled := lipgloss.NewStyle().Foreground(c.Foreground).Render(name)
-			content := fmt.Sprintf(" %s %s %s", dot, nameStyled, badge)
+			starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
+			content := fmt.Sprintf(" %s %s %s%s", dot, nameStyled, badge, starStyled)
 			line = lipgloss.NewStyle().
 				Background(c.Background).
 				Foreground(c.Foreground).

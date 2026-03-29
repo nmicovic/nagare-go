@@ -114,15 +114,16 @@ func (r *Registry) Remove(name string) {
 	}
 }
 
-// ToggleStar toggles the starred flag. Saves to disk.
-func (r *Registry) ToggleStar(name string) {
+// ToggleStar toggles the starred flag. Saves to disk. Returns new state.
+func (r *Registry) ToggleStar(name string) bool {
 	for i := range r.sessions {
 		if r.sessions[i].Name == name {
 			r.sessions[i].Starred = !r.sessions[i].Starred
 			r.save()
-			return
+			return r.sessions[i].Starred
 		}
 	}
+	return false
 }
 
 // Touch updates the last_accessed timestamp. Saves to disk.

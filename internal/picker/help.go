@@ -20,6 +20,11 @@ func helpBar(width int) string {
 		{"Tab", "View"},
 		{"Ctrl+y", "Allow"},
 		{"Ctrl+a", "Always"},
+		{"Ctrl+f", "Star"},
+		{"Ctrl+o", "Sort"},
+		{"Ctrl+w", "Unload"},
+		{"Ctrl+x", "Kill"},
+		{"F2", "Rename"},
 		{"Ctrl+t", "Theme"},
 		{"F1", "Help"},
 		{"Esc", "Quit"},
@@ -79,6 +84,11 @@ func helpOverlay(width, height int) string {
 		section("Actions"),
 		line("Ctrl+y", "Approve permission (waiting sessions)"),
 		line("Ctrl+a", "Approve always (waiting sessions)"),
+		line("Ctrl+f", "Toggle star/favorite"),
+		line("Ctrl+o", "Cycle sort mode (status/name/agent)"),
+		line("Ctrl+w", "Unload agent (kill pane)"),
+		line("Ctrl+x", "Kill entire tmux session"),
+		line("F2", "Rename session"),
 		section("Search"),
 		line("Type", "Fuzzy search by session name or path"),
 		line("", "Best match is auto-selected"),
@@ -87,8 +97,8 @@ func helpOverlay(width, height int) string {
 	}, "\n")
 
 	return dialogStyle().
-		Width(width * 2 / 3).
-		Height(height * 2 / 3).
+		Width(width*2/3).
+		Height(height*2/3).
 		Padding(2, 4).
 		Render(content)
 }

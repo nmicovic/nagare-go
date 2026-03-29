@@ -11,4 +11,9 @@ const (
 	keyToggleView    = "tab"
 	keyCycleTheme    = "ctrl+t"
 	keyHelp          = "f1"
+	keyUnload        = "ctrl+w"
+	keyKillSession   = "ctrl+x"
+	keyStar          = "ctrl+f"
+	keyCycleSort     = "ctrl+o"
+	keyRename        = "f2"
 )

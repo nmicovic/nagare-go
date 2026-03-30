@@ -69,6 +69,9 @@ func Run() error {
 		fmt.Printf("  MCP server: OpenCode — %s\n", ocPath)
 	}
 
+	// Install slash commands for all supported agent CLIs
+	installCommands(home)
+
 	fmt.Println("\nSetup complete!")
 	return nil
 }

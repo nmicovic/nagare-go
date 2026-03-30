@@ -77,13 +77,11 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		}
 
 		agentType, ok := agentProcesses[cmd]
-		if !ok && cmd == "node" {
-			agentType, ok = resolveNodeAgent(pid)
+		if !ok {
+			agentType, ok = resolveAgentFromDescendants(pid)
 			if !ok {
 				continue
 			}
-		} else if !ok {
-			continue
 		}
 
 		result[sessionName] = append(result[sessionName], PaneInfo{
@@ -96,29 +94,46 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 	return result
 }
 
-// resolveNodeAgent checks /proc to identify Gemini running under node.
+// descendantAgents maps process names found in /proc cmdline to agent types.
+var descendantAgents = map[string]models.AgentType{
+	"gemini": models.AgentGemini,
+	"crush":  models.AgentCrush,
+}
+
+// resolveAgentFromDescendants walks the process tree via /proc to find
+// known agents running as descendants (e.g. zsh → node → crush).
 // Linux-only: silently returns false on macOS/other platforms.
-func resolveNodeAgent(pid string) (models.AgentType, bool) {
-	childrenPath := fmt.Sprintf("/proc/%s/task/%s/children", pid, pid)
-	data, err := os.ReadFile(childrenPath)
-	if err != nil {
-		return "", false
-	}
-	for _, childPid := range strings.Fields(string(data)) {
-		cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%s/cmdline", childPid))
-		if err != nil {
-			continue
-		}
-		args := strings.Split(string(cmdline), "\x00")
-		for _, arg := range args {
-			basename := arg
-			if idx := strings.LastIndex(arg, "/"); idx >= 0 {
-				basename = arg[idx+1:]
+func resolveAgentFromDescendants(pid string) (models.AgentType, bool) {
+	// BFS through child processes, max 3 levels deep.
+	queue := []string{pid}
+	for depth := 0; depth < 3 && len(queue) > 0; depth++ {
+		var next []string
+		for _, p := range queue {
+			childrenPath := fmt.Sprintf("/proc/%s/task/%s/children", p, p)
+			data, err := os.ReadFile(childrenPath)
+			if err != nil {
+				continue
 			}
-			if basename == "gemini" {
-				return models.AgentGemini, true
+			for _, childPid := range strings.Fields(string(data)) {
+				next = append(next, childPid)
+				cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%s/cmdline", childPid))
+				if err != nil {
+					continue
+				}
+				args := strings.Split(string(cmdline), "\x00")
+				if len(args) == 0 {
+					continue
+				}
+				exe := args[0]
+				if idx := strings.LastIndex(exe, "/"); idx >= 0 {
+					exe = exe[idx+1:]
+				}
+				if agentType, ok := descendantAgents[exe]; ok {
+					return agentType, true
+				}
 			}
 		}
+		queue = next
 	}
 	return "", false
 }

@@ -24,6 +24,8 @@ const (
 	AgentOpenCode AgentType = "opencode"
 	// AgentGemini represents the Gemini agent.
 	AgentGemini AgentType = "gemini"
+	// AgentCrush represents the Crush agent.
+	AgentCrush AgentType = "crush"
 	// AgentUnknown represents an unrecognized agent.
 	AgentUnknown AgentType = "unknown"
 )
@@ -103,6 +105,8 @@ func AgentLabel(a AgentType) string {
 		return "OpenCode"
 	case AgentGemini:
 		return "Gemini"
+	case AgentCrush:
+		return "Crush"
 	default:
 		return "Unknown"
 	}
@@ -117,6 +121,8 @@ func AgentColor(a AgentType) string {
 		return "#00e5ff"
 	case AgentGemini:
 		return "#4285f4"
+	case AgentCrush:
+		return "#ff5fd7"
 	default:
 		return "#565f89"
 	}
@@ -131,6 +137,8 @@ func AgentBgColor(a AgentType) string {
 		return "#002b33"
 	case AgentGemini:
 		return "#1a2744"
+	case AgentCrush:
+		return "#3b1a33"
 	default:
 		return ""
 	}

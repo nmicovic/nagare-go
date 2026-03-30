@@ -1,6 +1,7 @@
 package newsession
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -155,6 +156,21 @@ func (m *Model) updateFocus() {
 	}
 }
 
+// resolvedPath returns the effective working directory that will be created,
+// mirroring the logic in session.Create so the user sees exactly where the
+// session will land before pressing Enter.
+func (m Model) resolvedPath() string {
+	path := m.pathInput.Value()
+	if path == "" {
+		return ""
+	}
+	name := m.nameInput.Value()
+	if name != "" {
+		path = filepath.Join(path, name)
+	}
+	return session.ExpandPath(session.ResolvePath(path))
+}
+
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	path := m.pathInput.Value()
 	if path == "" {
@@ -208,6 +224,19 @@ func (m Model) View() string {
 	// Name field
 	nameField := "  Name:  " + m.nameInput.View()
 
+	// Resolved directory preview — show full target path + exists/new badge
+	var dirLine string
+	if rp := m.resolvedPath(); rp != "" {
+		_, statErr := os.Stat(rp)
+		var badge string
+		if os.IsNotExist(statErr) {
+			badge = lipgloss.NewStyle().Foreground(c.Warning).Render(" (will be created)")
+		} else {
+			badge = lipgloss.NewStyle().Foreground(c.Success).Render(" (exists)")
+		}
+		dirLine = "  →  " + lipgloss.NewStyle().Foreground(c.Accent).Bold(true).Render(rp) + badge
+	}
+
 	// Agent field
 	agentStr := renderAgentPicker(agents, m.agent, m.focus == 2)
 
@@ -233,6 +262,7 @@ func (m Model) View() string {
 		pathField,
 		sugStr,
 		nameField,
+		dirLine,
 		"",
 		agentStr,
 		"",

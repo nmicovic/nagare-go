@@ -761,7 +761,9 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	b.WriteString("\n\n")
 
 	// Session list
-	// Panel overhead: border (2) + padding (2) = 4
+	// lipgloss Height(H) = post-padding, pre-border height; outer = H+2.
+	// Pass Height(outerHeight-2) so outer panel = outerHeight.
+	// Inner content = (outerHeight-2) - vertical_padding(2) = outerHeight-4.
 	// Content above list: stats (1) + blank (1) + search (1) + blank (1) = 4
 	listHeight := outerHeight - 8
 	if listHeight < 1 {
@@ -775,8 +777,8 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	}
 
 	return panelStyle().
-		Width(outerWidth).
-		Height(outerHeight).
+		Width(outerWidth - 2).
+		Height(outerHeight - 2).
 		Render(b.String())
 }
 
@@ -895,8 +897,8 @@ func (m Model) renderGridView(width, height int) string {
 func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
 		return panelStyle().
-			Width(outerWidth).
-			Height(outerHeight).
+			Width(outerWidth - 2).
+			Height(outerHeight - 2).
 			Render(mutedStyle().Render("No session selected"))
 	}
 
@@ -940,24 +942,45 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Last  "), mutedStyle().Render(msg)))
 	}
 
-	detailHeight := outerHeight / 5
-	detailStr := panelStyle().
-		Width(outerWidth).
-		Height(detailHeight).
-		Render(detail.String())
+	// Size detail panel to fit its content exactly.
+	// lipgloss outer = Height+2 (border), inner = Height - padding_v(2) = Height-2.
+	// So outer = content_lines + 4 (padding 2 + border 2).
+	detailContent := detail.String()
+	detailLines := strings.Count(detailContent, "\n") + 1
+	detailOuter := detailLines + 4
+	if detailOuter > outerHeight/2 {
+		// Cap at half the panel and clamp content to fit.
+		detailOuter = outerHeight / 2
+		maxContent := detailOuter - 4
+		if maxContent < 1 {
+			maxContent = 1
+		}
+		ls := strings.Split(detailContent, "\n")
+		if len(ls) > maxContent {
+			detailContent = strings.Join(ls[:maxContent], "\n")
+		}
+	}
+	if detailOuter < 6 {
+		detailOuter = 6
+	}
 
-	// Preview section
-	previewHeight := outerHeight - detailHeight
-	if previewHeight < 3 {
-		previewHeight = 3
+	detailStr := panelStyle().
+		Width(outerWidth - 2).
+		Height(detailOuter - 2).
+		Render(detailContent)
+
+	// Preview section: gets the remaining height.
+	// inner = previewOuter - border(2), no vertical padding on previewPanelStyle.
+	previewOuter := outerHeight - detailOuter
+	if previewOuter < 5 {
+		previewOuter = 5
 	}
 
 	previewContent := m.preview
 	if previewContent == "" {
 		previewContent = mutedStyle().Render("No preview available")
 	} else {
-		// Border = 2 lines, padding = 0 vertical for preview panel
-		maxLines := previewHeight - 2
+		maxLines := previewOuter - 2
 		if maxLines < 1 {
 			maxLines = 1
 		}
@@ -979,8 +1002,8 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	}
 
 	previewStr := previewPanelStyle().
-		Width(outerWidth).
-		Height(previewHeight).
+		Width(outerWidth - 2).
+		Height(previewOuter - 2).
 		Render(previewContent)
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
@@ -1003,8 +1026,8 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 
 	if len(m.filtered) == 0 {
 		return panelStyle().
-			Width(totalWidth).
-			Height(totalHeight).
+			Width(totalWidth - 2).
+			Height(totalHeight - 2).
 			Render(mutedStyle().Render("No sessions found"))
 	}
 
@@ -1073,8 +1096,8 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 				BorderStyle(lipgloss.RoundedBorder()).
 				BorderForeground(borderColor).
 				BorderBackground(c.Background).
-				Width(cellWidth).
-				Height(cellHeight).
+				Width(cellWidth - 2).
+				Height(cellHeight - 2).
 				Padding(1).
 				Render(content)
 
@@ -1084,7 +1107,12 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 	}
 
 	grid := strings.Join(rows, "\n")
-	return " " + searchBar + "\n" + grid
+	result := " " + searchBar + "\n" + grid
+	// Pad to totalHeight so the help bar (appended by View) lands at the bottom.
+	if pad := totalHeight - (strings.Count(result, "\n") + 1); pad > 0 {
+		result += strings.Repeat("\n", pad)
+	}
+	return result
 }
 
 func (m Model) getGridPreview(s models.Session, width, height int) string {
@@ -1095,12 +1123,13 @@ func (m Model) getGridPreview(s models.Session, width, height int) string {
 	}
 
 	lines := strings.Split(content, "\n")
-	// Trim leading blank lines
-	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
-		lines = lines[1:]
+	// Trim trailing blank lines so the last real content lands at the bottom.
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
 	}
+	// Take the bottom portion so the last line of the stream is visible.
 	if len(lines) > height {
-		lines = lines[:height]
+		lines = lines[len(lines)-height:]
 	}
 	for i, line := range lines {
 		if ansi.StringWidth(line) > width {

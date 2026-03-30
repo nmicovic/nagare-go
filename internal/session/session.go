@@ -56,6 +56,12 @@ func UniqueName(name string) string {
 
 // Create creates a new tmux session with the specified agent.
 func Create(path, name, agent string, continueSession bool) (string, error) {
+	// If a name is given, always treat path as the parent directory.
+	// ~/Projects + kenshi → ~/Projects/kenshi
+	// ~/Projects/ + kenshi → ~/Projects/kenshi
+	if name != "" {
+		path = filepath.Join(path, name)
+	}
 	path = ExpandPath(ResolvePath(path))
 
 	if err := os.MkdirAll(path, 0755); err != nil {
@@ -71,7 +77,7 @@ func Create(path, name, agent string, continueSession bool) (string, error) {
 	tmux.RunTmux("new-session", "-d", "-s", name, "-c", path)
 
 	// Launch agent
-	cmd := agentCommand(agent, continueSession)
+	cmd := agentCommand(agent, path, continueSession)
 	tmux.RunTmux("send-keys", "-t", name, cmd, "Enter")
 
 	// Register
@@ -82,8 +88,30 @@ func Create(path, name, agent string, continueSession bool) (string, error) {
 	return name, nil
 }
 
+// claudeSessionExists reports whether a previous Claude conversation exists
+// for the given project directory. Claude stores conversations as .jsonl files
+// under ~/.claude/projects/<path-with-slashes-as-dashes>/.
+func claudeSessionExists(projectPath string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	encoded := strings.ReplaceAll(projectPath, "/", "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			return true
+		}
+	}
+	return false
+}
+
 // agentCommand returns the command to launch an agent.
-func agentCommand(agent string, continueSession bool) string {
+func agentCommand(agent, projectPath string, continueSession bool) string {
 	switch agent {
 	case "opencode":
 		if continueSession {
@@ -93,7 +121,7 @@ func agentCommand(agent string, continueSession bool) string {
 	case "gemini":
 		return "gemini"
 	default: // claude
-		if continueSession {
+		if continueSession && claudeSessionExists(projectPath) {
 			return "claude -c"
 		}
 		return "claude"

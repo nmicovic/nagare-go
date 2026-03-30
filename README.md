@@ -1,5 +1,5 @@
 <h1 align="center">nagare-go 流れ</h1>
-<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, OpenCode, and Gemini CLI sessions from a single interface.</p>
+<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, OpenCode, Gemini CLI, and Crush sessions from a single interface.</p>
 
 <p align="center">
   <img src="images/nagare-logo-glowing.jpg" alt="nagare-go" width="550">
@@ -33,9 +33,10 @@ cd nagare-go
 ./nagare-go setup
 ```
 
-This does two things:
+This does three things:
 1. **Installs hooks** into `~/.claude/settings.json` — Claude Code will notify nagare on every event (prompt, stop, permission, session start/end)
-2. **Registers MCP server** in `~/.claude.json` — enables inter-agent messaging (list_agents, send_message, check_messages, reply)
+2. **Registers MCP server** in `~/.claude.json`, `~/.gemini/settings.json`, and `~/.config/opencode/config.json` — enables inter-agent messaging across all supported agent CLIs
+3. **Installs slash commands** (`/nagare-ls`, `/nagare-send`, `/nagare-send-wait`, `/nagare-inbox`) for Claude Code, Gemini CLI, and OpenCode
 
 Then add a tmux keybinding to open the picker:
 
@@ -54,7 +55,7 @@ nagare-go new ~/proj   # create new session with Claude
 nagare-go new myproto  # quick prototype (creates in ~/Prototypes/)
 nagare-go notifs       # notification center + settings
 nagare-go setup        # install hooks + MCP server
-nagare-go mcp          # run MCP server (stdio, used by Claude Code)
+nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 ```
 
 ## Picker Keybindings

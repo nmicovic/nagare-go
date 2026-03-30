@@ -1,4 +1,4 @@
-Do not mention CLAUDE in commit messages.
+Do not mention any AI agent (Claude, Gemini, Crush, OpenCode, etc.) in commit messages.
 Do not commit without explicit user permission.
 
 # nagare-go
@@ -24,16 +24,16 @@ nagare-go setup            # install hooks + MCP server
 nagare-go notifs           # notification center TUI
 nagare-go popup-notif      # popup notification (called by hooks)
 nagare-go new [path]       # create new agent session
-nagare-go mcp              # run MCP server (stdio, for Claude Code)
+nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 ```
 
 ## Architecture
 
 Single binary with cobra subcommands. All code in `internal/` packages.
 
-- `internal/models` — Session, SessionStatus, AgentType
+- `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush)
 - `internal/config` — TOML config loading + saving
-- `internal/tmux` — scanner (list-panes), status detection (pane scraping)
+- `internal/tmux` — scanner (list-panes + /proc descendant walk), status detection (pane scraping)
 - `internal/state` — state files + session registry
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
@@ -43,7 +43,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/session` — session creation + path resolution
 - `internal/newsession` — new session + quick prototype forms
 - `internal/theme` — 6 themes with AdaptiveColor, self-registering via init()
-- `internal/setup` — hook + MCP installation
+- `internal/setup` — hook + MCP + slash command installation (Claude Code, Gemini CLI, OpenCode)
 - `internal/mcp` — MCP server for inter-agent messaging
 - `internal/bin` — shared binary finder
 - `internal/fsutil` — atomic file writes

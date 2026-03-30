@@ -22,6 +22,7 @@ type PaneInfo struct {
 	WindowIndex int
 	PaneIndex   int
 	AgentType   models.AgentType
+	WindowName  string
 }
 
 var agentProcesses = map[string]models.AgentType{
@@ -52,7 +53,7 @@ func ParseSessions(raw string) []RawSession {
 }
 
 // ParseAllPanes parses tmux list-panes -a output.
-// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}"
+// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}"
 // Returns agent panes grouped by session name.
 func ParseAllPanes(raw string) map[string][]PaneInfo {
 	result := make(map[string][]PaneInfo)
@@ -61,8 +62,8 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 5)
-		if len(parts) != 5 {
+		parts := strings.SplitN(line, ":", 6)
+		if len(parts) < 5 {
 			continue
 		}
 		sessionName := parts[0]
@@ -70,6 +71,10 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		paneIdx, _ := strconv.Atoi(parts[2])
 		cmd := strings.TrimSpace(parts[3])
 		pid := parts[4]
+		windowName := ""
+		if len(parts) >= 6 {
+			windowName = strings.TrimSpace(parts[5])
+		}
 
 		agentType, ok := agentProcesses[cmd]
 		if !ok && cmd == "node" {
@@ -85,6 +90,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 			WindowIndex: windowIdx,
 			PaneIndex:   paneIdx,
 			AgentType:   agentType,
+			WindowName:  windowName,
 		})
 	}
 	return result
@@ -141,7 +147,7 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 	rawSessions := RunTmux("list-sessions", "-F", "#{session_name}:#{session_id}:#{session_path}")
 	sessions := ParseSessions(rawSessions)
 
-	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}")
+	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}")
 	allPanes := ParseAllPanes(rawPanes)
 
 	var result []models.Session
@@ -174,9 +180,16 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 			// Get git branch from working directory
 			details.GitBranch = gitBranch(sess.Path)
 
+			// Use window name as display name when multiple agents share a session
+			displayName := sess.Name
+			if len(panes) > 1 && pane.WindowName != "" && pane.WindowName != sess.Name {
+				displayName = pane.WindowName
+			}
+
 			result = append(result, models.Session{
-				Name:        sess.Name,
+				Name:        displayName,
 				SessionID:   sess.SessionID,
+				SessionName: sess.Name,
 				Path:        sess.Path,
 				WindowIndex: pane.WindowIndex,
 				PaneIndex:   pane.PaneIndex,

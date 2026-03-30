@@ -8,6 +8,7 @@ import (
 
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/log"
+	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
@@ -133,11 +134,21 @@ func ListDirectories(partial string, maxResults int) []string {
 
 // SwitchToSession switches to or attaches to a tmux session.
 func SwitchToSession(name string) {
-	// Inside tmux: switch client
 	if os.Getenv("TMUX") != "" {
 		tmux.RunTmux("switch-client", "-t", name)
 	} else {
-		// Outside tmux: attach
 		tmux.RunTmux("attach-session", "-t", name)
+	}
+}
+
+// SwitchToPane switches to a specific tmux session:window.pane.
+func SwitchToPane(s models.Session) {
+	target := tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+	if os.Getenv("TMUX") != "" {
+		tmux.RunTmux("select-window", "-t", fmt.Sprintf("%s:%d", s.SessionName, s.WindowIndex))
+		tmux.RunTmux("select-pane", "-t", target)
+		tmux.RunTmux("switch-client", "-t", s.SessionName)
+	} else {
+		tmux.RunTmux("attach-session", "-t", target)
 	}
 }

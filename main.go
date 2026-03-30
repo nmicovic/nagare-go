@@ -9,6 +9,7 @@ import (
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/log"
+	"github.com/nemke/nagare-go/internal/mcp"
 	"github.com/nemke/nagare-go/internal/newsession"
 	"github.com/nemke/nagare-go/internal/notifs"
 	"github.com/nemke/nagare-go/internal/picker"
@@ -145,7 +146,15 @@ func main() {
 	popupNotifCmd.Flags().Int("timeout", 10, "Auto-dismiss timeout in seconds")
 	popupNotifCmd.Flags().Int("duration", 0, "Working seconds (for task_complete)")
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd)
+	mcpCmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "Run MCP server for inter-agent messaging",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return mcp.RunServer()
+		},
+	}
+
+	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

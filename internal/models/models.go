@@ -39,8 +39,9 @@ type SessionDetails struct {
 
 // Session represents a discovered agent pane in tmux.
 type Session struct {
-	Name        string
-	SessionID   string
+	Name        string // display name (window name if multi-agent, else session name)
+	SessionID   string // tmux session ID ($0, $1, etc.)
+	SessionName string // actual tmux session name (for switch-client)
 	Path        string
 	WindowIndex int
 	PaneIndex   int

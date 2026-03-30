@@ -46,8 +46,96 @@ func Run() error {
 		return fmt.Errorf("failed to install hooks: %w", err)
 	}
 
+	// Register MCP server in all supported agents
+	nagareBin := bin.FindSelf()
+
+	// Claude Code + Gemini CLI use standard mcpServers format
+	for _, mc := range []struct{ name, path string }{
+		{"Claude Code", filepath.Join(home, ".claude.json")},
+		{"Gemini CLI", filepath.Join(home, ".gemini", "settings.json")},
+	} {
+		if err := registerMCPStandard(mc.path, nagareBin); err != nil {
+			fmt.Printf("  MCP server: %s — skipped (%v)\n", mc.name, err)
+		} else {
+			fmt.Printf("  MCP server: %s — %s\n", mc.name, mc.path)
+		}
+	}
+
+	// OpenCode uses its own format
+	ocPath := filepath.Join(home, ".config", "opencode", "config.json")
+	if err := registerMCPOpenCode(ocPath, nagareBin); err != nil {
+		fmt.Printf("  MCP server: OpenCode — skipped (%v)\n", err)
+	} else {
+		fmt.Printf("  MCP server: OpenCode — %s\n", ocPath)
+	}
+
 	fmt.Println("\nSetup complete!")
 	return nil
+}
+
+// registerMCPStandard adds nagare to the standard mcpServers format
+// used by Claude Code, Gemini CLI, Cursor, etc.
+func registerMCPStandard(configPath, nagareBin string) error {
+	cfg, err := loadJSON(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot read %s: %w", configPath, err)
+	}
+	if cfg == nil {
+		cfg = make(map[string]interface{})
+	}
+
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		servers = make(map[string]interface{})
+	}
+
+	servers["nagare"] = map[string]interface{}{
+		"command": nagareBin,
+		"args":    []string{"mcp"},
+	}
+	cfg["mcpServers"] = servers
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, out, 0644)
+}
+
+// registerMCPOpenCode adds nagare to OpenCode's config format.
+// OpenCode uses "mcp" key with type/command array format.
+func registerMCPOpenCode(configPath, nagareBin string) error {
+	cfg, err := loadJSON(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot read %s: %w", configPath, err)
+	}
+	if cfg == nil {
+		cfg = make(map[string]interface{})
+	}
+
+	mcpMap, _ := cfg["mcp"].(map[string]interface{})
+	if mcpMap == nil {
+		mcpMap = make(map[string]interface{})
+	}
+
+	mcpMap["nagare"] = map[string]interface{}{
+		"type":    "local",
+		"command": []string{nagareBin, "mcp"},
+		"enabled": true,
+	}
+	cfg["mcp"] = mcpMap
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, out, 0644)
 }
 
 func installClaudeHooks(home string) error {
@@ -79,27 +167,28 @@ func installClaudeHooks(home string) error {
 		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare hook-state")
 	}
 
-	// Install hooks for standard events
+	// Hook command entry
 	hookEntry := map[string]interface{}{
 		"type":    "command",
 		"command": hookCmd,
 		"timeout": 5,
 	}
 
+	// Standard events: matcher="" matches all
 	for _, event := range hookEvents {
-		hooksMap[event] = appendHookEntry(hooksMap[event], hookEntry)
+		hooksMap[event] = appendHookEntry(hooksMap[event], map[string]interface{}{
+			"matcher": "",
+			"hooks":   []interface{}{hookEntry},
+		})
 	}
 
-	// Notification event has a matcher
-	notifEntry := map[string]interface{}{
-		"matcher": notificationMatcher,
-		"hooks": []interface{}{
-			hookEntry,
-		},
-	}
+	// Notification event has a specific matcher
 	hooksMap["Notification"] = appendHookEntry(
 		removeNagareHooks(hooksMap["Notification"], "nagare-go hook-state"),
-		notifEntry,
+		map[string]interface{}{
+			"matcher": notificationMatcher,
+			"hooks":   []interface{}{hookEntry},
+		},
 	)
 
 	settings["hooks"] = hooksMap

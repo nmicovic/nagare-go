@@ -222,7 +222,7 @@ func (m Model) View() string {
 	// Render base content
 	contentHeight := m.height
 	if m.showHelpBar {
-		contentHeight = m.height - 1
+		contentHeight = m.height - 2 // help bar can wrap to 2 lines
 	}
 
 	var base string
@@ -302,7 +302,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyEnter:
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
-			session.SwitchToSession(s.Name)
+			session.SwitchToPane(s)
 			return m, tea.Quit
 		}
 	case keyUp:
@@ -358,20 +358,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyApprove:
 		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "Enter")
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Enter")
 			log.Info("approved %s", s.Name)
 		}
 		return m, nil
 	case keyApproveAlways:
 		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex), "Down", "Enter")
+			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Down", "Enter")
 			log.Info("approved always %s", s.Name)
 		}
 		return m, nil
 	case keyUnload:
 		if s, ok := m.selectedSession(); ok {
 			markDead(s, m.statesDir)
-			tmux.RunTmux("kill-pane", "-t", tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex))
+			tmux.RunTmux("kill-pane", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex))
 			log.Info("unloaded pane %s", s.Name)
 			return m, doScan(m.statesDir)
 		}
@@ -379,7 +379,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyKillSession:
 		if s, ok := m.selectedSession(); ok {
 			markDead(s, m.statesDir)
-			tmux.RunTmux("kill-session", "-t", s.Name)
+			tmux.RunTmux("kill-session", "-t", s.SessionName)
 			log.Info("killed session %s", s.Name)
 			return m, doScan(m.statesDir)
 		}
@@ -472,7 +472,7 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		oldName := m.renameSession.Name
+		oldName := m.renameSession.SessionName
 
 		// Check if name already exists
 		existing := tmux.RunTmux("list-sessions", "-F", "#{session_name}")
@@ -483,10 +483,10 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Count sessions with same name (multi-agent check)
+		// Count agents in the same tmux session (multi-agent check)
 		count := 0
 		for _, s := range m.sessions {
-			if s.Name == oldName {
+			if s.SessionName == oldName {
 				count++
 			}
 		}
@@ -543,7 +543,7 @@ func (m Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // sendPromptToPane sends text to a session's tmux pane.
 func sendPromptToPane(s models.Session, text string) {
-	target := tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex)
+	target := tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		if i < len(lines)-1 {
@@ -642,8 +642,8 @@ func (m Model) doPreview() tea.Cmd {
 		return func() tea.Msg {
 			previews := make(map[string]string)
 			for _, s := range sessions {
-				target := tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex)
-				previews[target] = CapturePreview(s.Name, s.WindowIndex, s.PaneIndex)
+				target := tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+				previews[target] = CapturePreview(s.SessionName, s.WindowIndex, s.PaneIndex)
 			}
 			return gridPreviewsMsg(previews)
 		}
@@ -652,7 +652,7 @@ func (m Model) doPreview() tea.Cmd {
 	// List view: capture only the selected session
 	s := m.filtered[m.cursor]
 	return func() tea.Msg {
-		content := CapturePreview(s.Name, s.WindowIndex, s.PaneIndex)
+		content := CapturePreview(s.SessionName, s.WindowIndex, s.PaneIndex)
 		return PreviewUpdatedMsg(content)
 	}
 }
@@ -761,7 +761,9 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	b.WriteString("\n\n")
 
 	// Session list
-	listHeight := outerHeight - 10
+	// Panel overhead: border (2) + padding (2) = 4
+	// Content above list: stats (1) + blank (1) + search (1) + blank (1) = 4
+	listHeight := outerHeight - 8
 	if listHeight < 1 {
 		listHeight = 1
 	}
@@ -1086,7 +1088,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 }
 
 func (m Model) getGridPreview(s models.Session, width, height int) string {
-	target := tmux.PaneTarget(s.Name, s.WindowIndex, s.PaneIndex)
+	target := tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
 	content := m.gridPreviews[target]
 	if content == "" {
 		return mutedStyle().Render("Loading...")

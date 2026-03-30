@@ -1,6 +1,11 @@
-# nagare-go 流れ
+<h1 align="center">nagare-go 流れ</h1>
+<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, OpenCode, and Gemini CLI sessions from a single interface.</p>
 
-Go rewrite of [nagare](https://github.com/nemke/nagare) — a tmux session manager for AI coding agents (Claude Code, OpenCode, Gemini CLI).
+<p align="center">
+  <img src="images/nagare-logo-glowing.jpg" alt="nagare-go" width="550">
+</p>
+
+Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3ms startup, no runtime dependencies.
 
 ## Features
 

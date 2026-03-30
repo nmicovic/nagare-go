@@ -12,7 +12,7 @@ func TestInstallClaudeHooks_NewFile(t *testing.T) {
 	claudeDir := filepath.Join(home, ".claude")
 	os.MkdirAll(claudeDir, 0755)
 
-	if err := installClaudeHooks(home); err != nil {
+	if err := installClaudeHooks(home, "nagare-go-test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +73,7 @@ func TestInstallClaudeHooks_PreservesExisting(t *testing.T) {
 	data, _ := json.Marshal(existing)
 	os.WriteFile(filepath.Join(claudeDir, "settings.json"), data, 0644)
 
-	if err := installClaudeHooks(home); err != nil {
+	if err := installClaudeHooks(home, "nagare-go-test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -125,7 +125,7 @@ func TestInstallClaudeHooks_RemovesStaleHooks(t *testing.T) {
 	data, _ := json.Marshal(existing)
 	os.WriteFile(filepath.Join(claudeDir, "settings.json"), data, 0644)
 
-	if err := installClaudeHooks(home); err != nil {
+	if err := installClaudeHooks(home, "nagare-go-test"); err != nil {
 		t.Fatal(err)
 	}
 

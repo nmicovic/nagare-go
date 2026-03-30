@@ -806,7 +806,7 @@ func (m Model) renderListView(width, height int) string {
 			Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
 			Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
 			Padding(0, 1).
-			Render(string(models.AgentLabel(s.AgentType)[0]))
+			Render(models.AgentLabel(s.AgentType))
 
 		name := s.Name
 		maxName := width - 20
@@ -825,14 +825,15 @@ func (m Model) renderListView(width, height int) string {
 
 		var line string
 		if i == m.cursor {
-			agentChar := string(models.AgentLabel(s.AgentType)[0])
+			cursor := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render(">")
+			nameStyled := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render(name)
+			starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
+			content := fmt.Sprintf(" %s %s %s %s%s", cursor, dot, nameStyled, badge, starStyled)
 			line = lipgloss.NewStyle().
-				Background(c.Primary).
-				Foreground(c.Background).
-				Bold(true).
+				Background(c.Background).
 				PaddingLeft(1).
 				Width(width).
-				Render(fmt.Sprintf("> ● %s  %s%s", name, agentChar, star))
+				Render(content)
 		} else {
 			nameStyled := lipgloss.NewStyle().Foreground(c.Foreground).Render(name)
 			starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
@@ -919,27 +920,46 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
 		Padding(0, 1)
 
-	var detail strings.Builder
-	detail.WriteString(titleStyle().Render(s.Name))
-	detail.WriteString("\n\n")
-	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), val.Render(s.Path)))
-	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Agent "), agentStyle.Render(models.AgentLabel(s.AgentType))))
-	detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Status"), statusStyle.Render(models.StatusLabel(s.Status))))
+	// Build info column
+	var info strings.Builder
+	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), val.Render(s.Path)))
+	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Agent "), agentStyle.Render(models.AgentLabel(s.AgentType))))
+	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Status"), statusStyle.Render(models.StatusLabel(s.Status))))
 
 	if s.Details.GitBranch != "" {
-		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))
 	}
 	if s.Details.LastActivity != "" {
-		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))
 	}
 	if s.LastMessage != "" {
-		// Truncate long messages
 		msg := s.LastMessage
-		maxLen := innerWidth - 12
+		maxLen := innerWidth - 30
 		if maxLen > 0 && len(msg) > maxLen {
 			msg = msg[:maxLen] + "..."
 		}
-		detail.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Last  "), mutedStyle().Render(msg)))
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Last  "), mutedStyle().Render(msg)))
+	}
+
+	// Combine art on the left with info on the right
+	var detail strings.Builder
+	art := renderAgentArt(s.AgentType)
+	if art != "" && innerWidth > 40 {
+		artWidth := lipgloss.Width(art)
+		infoWidth := innerWidth - artWidth - 2 // 2 for gap
+		infoBlock := lipgloss.NewStyle().
+			Width(infoWidth).
+			Background(c.Background).
+			Render(titleStyle().Render(s.Name) + "\n\n" + info.String())
+		gap := lipgloss.NewStyle().
+			Width(2).
+			Background(c.Background).
+			Render("")
+		detail.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, art, gap, infoBlock))
+	} else {
+		detail.WriteString(titleStyle().Render(s.Name))
+		detail.WriteString("\n\n")
+		detail.WriteString(info.String())
 	}
 
 	// Size detail panel to fit its content exactly.
@@ -1072,6 +1092,18 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 			if innerWidth < 10 {
 				innerWidth = 10
 			}
+
+			// Small agent art floated to the right of the header
+			art := renderAgentArtSmall(s.AgentType)
+			artWidth := lipgloss.Width(art)
+			topBlock := header + "\n" + meta
+			if art != "" && innerWidth > 30 {
+				textWidth := innerWidth - artWidth - 1
+				textCol := lipgloss.NewStyle().Width(textWidth).Background(c.Background).Render(topBlock)
+				gap := lipgloss.NewStyle().Width(1).Background(c.Background).Render("")
+				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, textCol, gap, art)
+			}
+
 			separator := lipgloss.NewStyle().Foreground(c.Border).Render(strings.Repeat("─", innerWidth))
 
 			// Preview: capture pane content for this session
@@ -1082,7 +1114,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 
 			preview := m.getGridPreview(s, innerWidth, previewHeight)
 
-			content := header + "\n" + meta + "\n" + separator + "\n" + preview
+			content := topBlock + "\n" + separator + "\n" + preview
 
 			// Border color: bright for selected, muted for others
 			borderColor := c.Border

@@ -41,13 +41,18 @@ func Run() error {
 		return fmt.Errorf("cannot create states directory: %w", err)
 	}
 
+	// Find our binary once for all registrations
+	nagareBin := bin.FindSelf()
+
 	// Install hooks
-	if err := installClaudeHooks(home); err != nil {
-		return fmt.Errorf("failed to install hooks: %w", err)
+	if err := installClaudeHooks(home, nagareBin); err != nil {
+		return fmt.Errorf("failed to install Claude hooks: %w", err)
+	}
+	if err := installGeminiHooks(home, nagareBin); err != nil {
+		fmt.Printf("  Hooks: Gemini CLI — skipped (%v)\n", err)
 	}
 
 	// Register MCP server in all supported agents
-	nagareBin := bin.FindSelf()
 
 	// Claude Code + Gemini CLI use standard mcpServers format
 	for _, mc := range []struct{ name, path string }{
@@ -61,12 +66,16 @@ func Run() error {
 		}
 	}
 
-	// OpenCode uses its own format
-	ocPath := filepath.Join(home, ".config", "opencode", "config.json")
-	if err := registerMCPOpenCode(ocPath, nagareBin); err != nil {
-		fmt.Printf("  MCP server: OpenCode — skipped (%v)\n", err)
-	} else {
-		fmt.Printf("  MCP server: OpenCode — %s\n", ocPath)
+	// OpenCode and Crush use "mcp" key with type/command format
+	for _, mc := range []struct{ name, path string }{
+		{"OpenCode", filepath.Join(home, ".config", "opencode", "config.json")},
+		{"Crush", filepath.Join(home, ".config", "crush", "crush.json")},
+	} {
+		if err := registerMCPLocal(mc.path, nagareBin); err != nil {
+			fmt.Printf("  MCP server: %s — skipped (%v)\n", mc.name, err)
+		} else {
+			fmt.Printf("  MCP server: %s — %s\n", mc.name, mc.path)
+		}
 	}
 
 	// Install slash commands for all supported agent CLIs
@@ -108,9 +117,9 @@ func registerMCPStandard(configPath, nagareBin string) error {
 	return os.WriteFile(configPath, out, 0644)
 }
 
-// registerMCPOpenCode adds nagare to OpenCode's config format.
-// OpenCode uses "mcp" key with type/command array format.
-func registerMCPOpenCode(configPath, nagareBin string) error {
+// registerMCPLocal adds nagare to the "mcp" key config format
+// used by OpenCode and Crush.
+func registerMCPLocal(configPath, nagareBin string) error {
 	cfg, err := loadJSON(configPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("cannot read %s: %w", configPath, err)
@@ -141,11 +150,8 @@ func registerMCPOpenCode(configPath, nagareBin string) error {
 	return os.WriteFile(configPath, out, 0644)
 }
 
-func installClaudeHooks(home string) error {
+func installClaudeHooks(home, nagareBin string) error {
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-
-	// Find our binary
-	nagareBin := bin.FindSelf()
 	hookCmd := nagareBin + " hook-state"
 
 	// Load existing settings
@@ -211,6 +217,69 @@ func installClaudeHooks(home string) error {
 	fmt.Printf("  Hooks installed: %s\n", settingsPath)
 	fmt.Printf("  Command: %s\n", hookCmd)
 	fmt.Printf("  Events: %s, Notification\n", strings.Join(hookEvents, ", "))
+	return nil
+}
+
+// Gemini CLI hook events that map to nagare state changes.
+var geminiHookEvents = []string{
+	"BeforeTool",
+	"AfterAgent",
+	"SessionEnd",
+}
+
+func installGeminiHooks(home, nagareBin string) error {
+	settingsPath := filepath.Join(home, ".gemini", "settings.json")
+	hookCmd := nagareBin + " hook-state"
+
+	settings, err := loadJSON(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot read %s: %w", settingsPath, err)
+	}
+	if settings == nil {
+		settings = make(map[string]interface{})
+	}
+
+	hooksMap, _ := settings["hooks"].(map[string]interface{})
+	if hooksMap == nil {
+		hooksMap = make(map[string]interface{})
+	}
+
+	// Remove stale nagare hooks
+	for event := range hooksMap {
+		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare-go hook-state")
+		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare hook-state")
+	}
+
+	hookEntry := map[string]interface{}{
+		"name":    "nagare",
+		"type":    "command",
+		"command": hookCmd,
+	}
+
+	for _, event := range geminiHookEvents {
+		hooksMap[event] = appendHookEntry(hooksMap[event], hookEntry)
+	}
+
+	// Notification event for permission prompts
+	hooksMap["Notification"] = appendHookEntry(
+		removeNagareHooks(hooksMap["Notification"], "nagare-go hook-state"),
+		hookEntry,
+	)
+
+	settings["hooks"] = hooksMap
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		return err
+	}
+
+	fmt.Printf("  Hooks installed: Gemini CLI — %s\n", settingsPath)
 	return nil
 }
 

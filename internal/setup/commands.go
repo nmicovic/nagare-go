@@ -100,6 +100,53 @@ func installCommands(home string) {
 		}
 		fmt.Printf("  Commands: %s — %s\n", t.label, t.dir)
 	}
+
+	// Crush uses Agent Skills instead of slash commands
+	installCrushSkill(home)
+}
+
+// installCrushSkill writes a nagare Agent Skill to ~/.config/crush/skills/nagare/SKILL.md.
+func installCrushSkill(home string) {
+	dir := filepath.Join(home, ".config", "crush", "skills", "nagare")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Printf("  Skill: Crush — skipped (%v)\n", err)
+		return
+	}
+	skill := `# Nagare — Inter-Agent Messaging
+
+You have access to the nagare MCP server for communicating with other AI agent sessions.
+
+## Available Tools
+
+- **list_agents()** — List all active agent sessions with name, type, status, and path
+- **send_message(target, message)** — Send a fire-and-forget message to another agent
+- **send_message_and_wait(target, message, timeout)** — Send a message and block until the other agent replies (default timeout: 120s)
+- **check_messages()** — Check your inbox for pending messages and late responses
+- **reply(message_id, content)** — Reply to a pending message
+
+## Workflows
+
+### List sessions
+Call list_agents() to see all available sessions.
+
+### Send a message (fire-and-forget)
+1. Call list_agents() to find the target
+2. Call send_message(target, message)
+3. Later, call check_messages() to see if they responded
+
+### Send and wait for reply
+1. Call list_agents() and verify target is IDLE
+2. Call send_message_and_wait(target, message, timeout)
+
+### Check inbox
+Call check_messages() — reply to pending messages with reply(message_id, content).
+`
+	path := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(path, []byte(skill), 0644); err != nil {
+		fmt.Printf("  Skill: Crush — skipped (%v)\n", err)
+		return
+	}
+	fmt.Printf("  Skill: Crush — %s\n", dir)
 }
 
 func writeCommandFiles(t commandTarget) error {

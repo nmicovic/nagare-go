@@ -120,16 +120,14 @@ func resolveAgentFromDescendants(pid string) (models.AgentType, bool) {
 				if err != nil {
 					continue
 				}
-				args := strings.Split(string(cmdline), "\x00")
-				if len(args) == 0 {
-					continue
-				}
-				exe := args[0]
-				if idx := strings.LastIndex(exe, "/"); idx >= 0 {
-					exe = exe[idx+1:]
-				}
-				if agentType, ok := descendantAgents[exe]; ok {
-					return agentType, true
+				for _, arg := range strings.Split(string(cmdline), "\x00") {
+					base := arg
+					if idx := strings.LastIndex(arg, "/"); idx >= 0 {
+						base = arg[idx+1:]
+					}
+					if agentType, ok := descendantAgents[base]; ok {
+						return agentType, true
+					}
 				}
 			}
 		}

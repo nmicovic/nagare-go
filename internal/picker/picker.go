@@ -80,6 +80,7 @@ type Model struct {
 	themeNames    []string          // cached sorted theme names
 	themeCursor   int               // cursor in theme picker
 	themeOriginal string            // theme before opening picker (for cancel)
+	showSaved     bool              // show saved (unloaded) sessions
 	gridPreviews  map[string]string // cached grid cell previews keyed by pane target
 	registry      *state.Registry
 	renameMode    bool
@@ -161,7 +162,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionsUpdatedMsg:
 		m.sessions = []models.Session(msg)
-		log.Debug("scan: %d sessions", len(m.sessions))
+		m.mergeSavedSessions()
+		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
 		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
 
@@ -302,6 +304,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyEnter:
 		if len(m.filtered) > 0 {
 			s := m.filtered[m.cursor]
+			if s.Status == models.StatusSaved {
+				agent := string(s.AgentType)
+				if agent == "" || agent == "unknown" {
+					agent = "claude"
+				}
+				name, err := session.Load(s.Path, s.Name, agent)
+				if err != nil {
+					log.Error("load session: %v", err)
+					return m, nil
+				}
+				session.SwitchToSession(name)
+				return m, tea.Quit
+			}
 			session.SwitchToPane(s)
 			return m, tea.Quit
 		}
@@ -383,6 +398,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			log.Info("killed session %s", s.Name)
 			return m, doScan(m.statesDir)
 		}
+		return m, nil
+	case keyToggleSaved:
+		m.showSaved = !m.showSaved
+		m.applyFilter()
 		return m, nil
 	case keyStar:
 		if s, ok := m.selectedSession(); ok {
@@ -657,25 +676,68 @@ func (m Model) doPreview() tea.Cmd {
 	}
 }
 
+// --- Saved session merging ---
+
+// mergeSavedSessions appends registry sessions that aren't currently running.
+func (m *Model) mergeSavedSessions() {
+	active := make(map[string]bool)
+	for _, s := range m.sessions {
+		active[s.SessionName] = true
+	}
+	for _, rs := range m.registry.ListAll() {
+		if active[rs.Name] {
+			continue
+		}
+		m.sessions = append(m.sessions, models.Session{
+			Name:        rs.Name,
+			SessionName: rs.Name,
+			Path:        rs.Path,
+			Status:      models.StatusSaved,
+			AgentType:   models.AgentType(rs.Agent),
+		})
+	}
+}
+
+func (m *Model) countSaved() int {
+	n := 0
+	for _, s := range m.sessions {
+		if s.Status == models.StatusSaved {
+			n++
+		}
+	}
+	return n
+}
+
 // --- Filtering & sorting ---
 
 func (m *Model) applyFilter() {
+	// Start with visible sessions (hide saved unless toggled)
+	visible := m.sessions
+	if !m.showSaved {
+		visible = make([]models.Session, 0, len(m.sessions))
+		for _, s := range m.sessions {
+			if s.Status != models.StatusSaved {
+				visible = append(visible, s)
+			}
+		}
+	}
+
 	query := m.searchInput.Value()
 	if query == "" {
-		m.filtered = make([]models.Session, len(m.sessions))
-		copy(m.filtered, m.sessions)
+		m.filtered = make([]models.Session, len(visible))
+		copy(m.filtered, visible)
 		m.sortFiltered()
 	} else {
 		// Build search targets: "name path" for each session
-		targets := make([]string, len(m.sessions))
-		for i, s := range m.sessions {
+		targets := make([]string, len(visible))
+		for i, s := range visible {
 			targets[i] = s.Name + " " + s.Path
 		}
 
 		matches := fuzzy.Find(query, targets)
 		m.filtered = make([]models.Session, len(matches))
 		for i, match := range matches {
-			m.filtered[i] = m.sessions[match.Index]
+			m.filtered[i] = visible[match.Index]
 		}
 		// fuzzy.Find returns results sorted by score (best first)
 		// so cursor 0 = best match
@@ -721,8 +783,10 @@ func statusOrder(s models.SessionStatus) int {
 		return 2
 	case models.StatusDead:
 		return 3
-	default:
+	case models.StatusSaved:
 		return 4
+	default:
+		return 5
 	}
 }
 

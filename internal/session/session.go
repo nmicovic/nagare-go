@@ -88,6 +88,38 @@ func Create(path, name, agent string, continueSession bool) (string, error) {
 	return name, nil
 }
 
+// Load restarts a previously saved session (already in the registry).
+// It reuses the existing name and path, continuing the agent if possible.
+func Load(path, name, agent string) (string, error) {
+	path = ExpandPath(path)
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("path does not exist: %s", path)
+	}
+
+	// Check if tmux session already exists
+	existing := tmux.RunTmux("list-sessions", "-F", "#{session_name}")
+	for _, line := range strings.Split(existing, "\n") {
+		if strings.TrimSpace(line) == name {
+			// Session exists but agent is dead — launch agent in it
+			cmd := agentCommand(agent, path, true)
+			tmux.RunTmux("send-keys", "-t", name, cmd, "Enter")
+			log.Info("loaded agent in existing session %s (%s)", name, agent)
+			return name, nil
+		}
+	}
+
+	// Create new tmux session
+	tmux.RunTmux("new-session", "-d", "-s", name, "-c", path)
+	cmd := agentCommand(agent, path, true)
+	tmux.RunTmux("send-keys", "-t", name, cmd, "Enter")
+
+	reg := state.NewRegistry(state.DefaultRegistryPath())
+	reg.Register(name, path, agent)
+
+	log.Info("loaded session %s (%s) at %s", name, agent, path)
+	return name, nil
+}
+
 // claudeSessionExists reports whether a previous Claude conversation exists
 // for the given project directory. Claude stores conversations as .jsonl files
 // under ~/.claude/projects/<path-with-slashes-as-dashes>/.

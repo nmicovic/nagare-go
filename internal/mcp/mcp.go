@@ -15,6 +15,7 @@ import (
 const (
 	StatusPending   = "pending"
 	StatusDelivered = "delivered"
+	StatusRead      = "read"
 	StatusCompleted = "completed"
 )
 

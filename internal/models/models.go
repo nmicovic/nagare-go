@@ -12,6 +12,8 @@ const (
 	StatusIdle SessionStatus = "idle"
 	// StatusDead indicates the agent process has exited.
 	StatusDead SessionStatus = "dead"
+	// StatusSaved indicates a saved session not currently running.
+	StatusSaved SessionStatus = "saved"
 )
 
 // AgentType represents which AI coding agent is running.
@@ -75,6 +77,8 @@ func StatusColor(s SessionStatus) string {
 		return "#00D26A"
 	case StatusDead:
 		return "#565f89"
+	case StatusSaved:
+		return "#3b4261"
 	default:
 		return "#565f89"
 	}
@@ -91,6 +95,8 @@ func StatusLabel(s SessionStatus) string {
 		return "Idle"
 	case StatusDead:
 		return "Exited"
+	case StatusSaved:
+		return "Not loaded"
 	default:
 		return "Unknown"
 	}

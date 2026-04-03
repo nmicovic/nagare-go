@@ -21,4 +21,5 @@ const (
 	keyInlinePrompt  = "ctrl+l"
 	keyEditPrompt    = "ctrl+g"
 	keyEditConfig    = "ctrl+e"
+	keyToggleSaved   = "ctrl+s"
 )

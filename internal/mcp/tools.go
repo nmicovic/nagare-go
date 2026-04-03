@@ -64,8 +64,8 @@ func SendMessageHandler(mySession string, input SendMessageInput) string {
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Nudge target to check messages
-	nudge := fmt.Sprintf("You have a new message from '%s'. Call check_messages() to read it.", mySession)
+	// Nudge target — informational only, no reply expected
+	nudge := fmt.Sprintf("FYI: '%s' sent you a message. Call check_messages() when convenient. No reply needed.", mySession)
 	paneTarget := tmux.PaneTarget(session.Name, session.WindowIndex, session.PaneIndex)
 	tmux.RunTmux("send-keys", "-t", paneTarget, nudge, "Enter")
 
@@ -111,8 +111,8 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Nudge target to check messages
-	nudge := fmt.Sprintf("You have a new message from '%s' that requires a reply. Call check_messages() to read it, then reply() to respond.", mySession)
+	// Nudge target — reply required
+	nudge := fmt.Sprintf("URGENT: '%s' sent you a message that requires a reply. Call check_messages() to read it, then reply() to respond.", mySession)
 	paneTarget := tmux.PaneTarget(session.Name, session.WindowIndex, session.PaneIndex)
 	tmux.RunTmux("send-keys", "-t", paneTarget, nudge, "Enter")
 
@@ -148,20 +148,42 @@ func CheckMessagesHandler(mySession string) string {
 
 	// Incoming messages (my inbox)
 	inbox, _ := ListInbox(mySession)
-	var pending []Message
+
+	// Unread: pending or delivered (not yet seen)
+	var unread []Message
 	for _, m := range inbox {
 		if m.Status == StatusPending || m.Status == StatusDelivered {
-			pending = append(pending, m)
+			unread = append(unread, m)
 		}
 	}
-	if len(pending) > 0 {
-		parts = append(parts, "=== Incoming Messages ===")
-		for _, m := range pending {
-			replyNote := ""
+	if len(unread) > 0 {
+		parts = append(parts, fmt.Sprintf("=== New Messages (%d) ===", len(unread)))
+		for i, m := range unread {
+			actionNote := "[INFORMATIONAL — no reply needed, do not respond]"
 			if m.ExpectsReply {
-				replyNote = fmt.Sprintf(" [REPLY NEEDED - use reply('%s', 'your response')]", m.ID)
+				actionNote = fmt.Sprintf("[REPLY NEEDED — use reply('%s', 'your response')]", m.ID)
 			}
-			parts = append(parts, fmt.Sprintf("From: %s%s\n%s", m.FromSession, replyNote, m.Content))
+			parts = append(parts, fmt.Sprintf("From: %s (sent %s)\n%s\nMessage ID: %s\n%s",
+				m.FromSession, m.CreatedAt, actionNote, m.ID, m.Content))
+
+			// Mark as read
+			unread[i].Status = StatusRead
+			WriteMessage(unread[i])
+		}
+	}
+
+	// Awaiting reply: read but still needs a response
+	var awaitingReply []Message
+	for _, m := range inbox {
+		if m.Status == StatusRead && m.ExpectsReply {
+			awaitingReply = append(awaitingReply, m)
+		}
+	}
+	if len(awaitingReply) > 0 {
+		parts = append(parts, fmt.Sprintf("=== Awaiting Your Reply (%d) ===", len(awaitingReply)))
+		for _, m := range awaitingReply {
+			parts = append(parts, fmt.Sprintf("From: %s (sent %s) [REPLY NEEDED - use reply('%s', 'your response')]\nMessage ID: %s\n%s",
+				m.FromSession, m.CreatedAt, m.ID, m.ID, m.Content))
 		}
 	}
 

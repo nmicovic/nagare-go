@@ -259,19 +259,22 @@ func truncate(s string, maxLen int) string {
 }
 
 // resolveMySession determines the current session name from cwd.
+// Checks live tmux sessions first (authoritative), then falls back to registry.
 func resolveMySession() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "unknown"
 	}
-	reg := state.NewRegistry(state.DefaultRegistryPath())
-	if s := reg.FindByPath(cwd); s != nil {
-		return s.Name
-	}
+	// Live tmux sessions are the source of truth
 	for _, s := range scanAll() {
 		if s.Path == cwd {
 			return s.Name
 		}
+	}
+	// Fall back to registry (may be stale)
+	reg := state.NewRegistry(state.DefaultRegistryPath())
+	if s := reg.FindByPath(cwd); s != nil {
+		return s.Name
 	}
 	return filepath.Base(cwd)
 }

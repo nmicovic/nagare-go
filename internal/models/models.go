@@ -49,6 +49,7 @@ type Session struct {
 	Path        string
 	WindowIndex int
 	PaneIndex   int
+	PaneID      string // tmux pane id, e.g. "%23"
 	Status      SessionStatus
 	AgentType   AgentType
 	Details     SessionDetails
@@ -60,6 +61,7 @@ type SessionState struct {
 	State            string `json:"state"`
 	SessionID        string `json:"session_id"`
 	Cwd              string `json:"cwd"`
+	PaneID           string `json:"pane_id,omitempty"`
 	Event            string `json:"event"`
 	NotificationType string `json:"notification_type,omitempty"`
 	LastMessage      string `json:"last_message,omitempty"`

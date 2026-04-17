@@ -89,6 +89,7 @@ type Model struct {
 	promptMode    bool
 	promptTarget  models.Session
 	promptInput   textinput.Model
+	lastQuery     string // previous search query, to detect query changes in applyFilter
 }
 
 // New creates a new picker model with default settings.
@@ -133,6 +134,15 @@ func (m Model) selectedSession() (models.Session, bool) {
 		return models.Session{}, false
 	}
 	return m.filtered[m.cursor], true
+}
+
+// sessionKey returns a stable identifier for a session. The cursor tracks this
+// key across re-filters so the selection follows the session, not the index.
+func sessionKey(s models.Session) string {
+	if s.Status == models.StatusSaved {
+		return "saved:" + s.Name
+	}
+	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
 }
 
 // isStarred returns whether a session is starred in the registry.
@@ -372,15 +382,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyApprove:
-		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Enter")
-			log.Info("approved %s", s.Name)
+		if s, ok := m.selectedSession(); ok {
+			if s.Status == models.StatusWaitingInput {
+				tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Enter")
+				log.Info("approved %s", s.Name)
+			} else {
+				log.Info("approve ignored: %s is %s, not waiting", s.Name, s.Status)
+			}
 		}
 		return m, nil
 	case keyApproveAlways:
-		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Down", "Enter")
-			log.Info("approved always %s", s.Name)
+		if s, ok := m.selectedSession(); ok {
+			if s.Status == models.StatusWaitingInput {
+				tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Down", "Enter")
+				log.Info("approved always %s", s.Name)
+			} else {
+				log.Info("approve-always ignored: %s is %s, not waiting", s.Name, s.Status)
+			}
 		}
 		return m, nil
 	case keyUnload:
@@ -711,6 +729,16 @@ func (m *Model) countSaved() int {
 // --- Filtering & sorting ---
 
 func (m *Model) applyFilter() {
+	// Remember which session the cursor points at so we can restore the
+	// selection after rebuilding the filtered list. Without this, a background
+	// scan (every 2s) re-sorts and the cursor index silently slides onto a
+	// different session — making Ctrl+y approvals land on (or miss) the
+	// wrong target.
+	prevKey := ""
+	if s, ok := m.selectedSession(); ok {
+		prevKey = sessionKey(s)
+	}
+
 	// Start with visible sessions (hide saved unless toggled)
 	visible := m.sessions
 	if !m.showSaved {
@@ -723,6 +751,9 @@ func (m *Model) applyFilter() {
 	}
 
 	query := m.searchInput.Value()
+	queryChanged := query != m.lastQuery
+	m.lastQuery = query
+
 	if query == "" {
 		m.filtered = make([]models.Session, len(visible))
 		copy(m.filtered, visible)
@@ -739,9 +770,20 @@ func (m *Model) applyFilter() {
 		for i, match := range matches {
 			m.filtered[i] = visible[match.Index]
 		}
-		// fuzzy.Find returns results sorted by score (best first)
-		// so cursor 0 = best match
+	}
+
+	// Cursor resolution: if the user just changed the query, jump to the top
+	// (best fuzzy match). Otherwise, follow the previously-selected session to
+	// its new index so background scans don't drift the selection.
+	if queryChanged {
 		m.cursor = 0
+	} else if prevKey != "" {
+		for i, s := range m.filtered {
+			if sessionKey(s) == prevKey {
+				m.cursor = i
+				break
+			}
+		}
 	}
 
 	if m.cursor >= len(m.filtered) {

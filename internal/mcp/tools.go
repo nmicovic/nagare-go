@@ -67,7 +67,7 @@ func SendMessageHandler(mySession string, input SendMessageInput) string {
 
 	// Nudge target — informational only, no reply expected
 	nudge := fmt.Sprintf("FYI: '%s' sent you a message. Call check_messages() when convenient. No reply needed.", mySession)
-	paneTarget := tmux.PaneTarget(session.Name, session.WindowIndex, session.PaneIndex)
+	paneTarget := paneTargetFor(session)
 	tmux.RunTmux("send-keys", "-t", paneTarget, nudge, "Enter")
 
 	// Write as delivered (single write)
@@ -114,7 +114,7 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 
 	// Nudge target — reply required
 	nudge := fmt.Sprintf("URGENT: '%s' sent you a message that requires a reply. Call check_messages() to read it, then reply() to respond.", mySession)
-	paneTarget := tmux.PaneTarget(session.Name, session.WindowIndex, session.PaneIndex)
+	paneTarget := paneTargetFor(session)
 	tmux.RunTmux("send-keys", "-t", paneTarget, nudge, "Enter")
 
 	// Write as delivered (single write)
@@ -241,6 +241,14 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 }
 
 // Helper functions
+
+// paneTargetFor builds a tmux pane target for a discovered session. It uses
+// SessionName (the real tmux session) rather than Name (the display name,
+// which can contain "/" for multi-pane disambiguation and is not a valid
+// tmux target).
+func paneTargetFor(s models.Session) string {
+	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+}
 
 // resolveSession finds a session by name. Exact match wins. If no exact match,
 // a prefix match on "{name}/..." is tried. Multiple prefix matches produce an

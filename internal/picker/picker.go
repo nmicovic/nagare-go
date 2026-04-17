@@ -89,6 +89,8 @@ type Model struct {
 	promptMode    bool
 	promptTarget  models.Session
 	promptInput   textinput.Model
+	lastQuery     string   // previous search query, to detect query changes in applyFilter
+	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
 }
 
 // New creates a new picker model with default settings.
@@ -133,6 +135,67 @@ func (m Model) selectedSession() (models.Session, bool) {
 		return models.Session{}, false
 	}
 	return m.filtered[m.cursor], true
+}
+
+// approvable reports whether Ctrl+y should send Enter to a session in this
+// status. Includes StatusRunning because the hook state lags: Claude fires
+// PreToolUse ("working") first, then Notification/permission_prompt
+// ("waiting_input") once the dialog is actually rendered — the yellow→red
+// transition can take a few seconds. Allowing approval during "working"
+// covers that gap. Idle/dead/saved sessions are skipped so a stray Ctrl+y
+// doesn't submit an empty prompt or hit a shell.
+func approvable(status models.SessionStatus) bool {
+	return status == models.StatusWaitingInput || status == models.StatusRunning
+}
+
+// sessionKey returns a stable identifier for a session. The cursor tracks this
+// key across re-filters so the selection follows the session, not the index.
+func sessionKey(s models.Session) string {
+	if s.Status == models.StatusSaved {
+		return "saved:" + s.Name
+	}
+	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+}
+
+// snapshotGridOrder captures the current m.filtered order into gridOrder so
+// subsequent scans preserve cell positions in grid view.
+func (m *Model) snapshotGridOrder() {
+	m.gridOrder = make([]string, len(m.filtered))
+	for i, s := range m.filtered {
+		m.gridOrder[i] = sessionKey(s)
+	}
+}
+
+// applyGridOrder rebuilds m.filtered honoring the frozen gridOrder: existing
+// sessions keep their slot, sessions not in the snapshot (newly appeared) are
+// appended, and sessions no longer visible are dropped. gridOrder is updated
+// to the new final order.
+func (m *Model) applyGridOrder(visible []models.Session) {
+	byKey := make(map[string]models.Session, len(visible))
+	for _, s := range visible {
+		byKey[sessionKey(s)] = s
+	}
+
+	result := make([]models.Session, 0, len(visible))
+	order := make([]string, 0, len(visible))
+
+	for _, k := range m.gridOrder {
+		if s, ok := byKey[k]; ok {
+			result = append(result, s)
+			order = append(order, k)
+			delete(byKey, k)
+		}
+	}
+	for _, s := range visible {
+		k := sessionKey(s)
+		if _, still := byKey[k]; still {
+			result = append(result, s)
+			order = append(order, k)
+		}
+	}
+
+	m.filtered = result
+	m.gridOrder = order
 }
 
 // isStarred returns whether a session is starred in the registry.
@@ -353,9 +416,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyToggleView:
 		if m.viewMode == ListView {
 			m.viewMode = GridView
+			// Fresh snapshot: start grid from current sorted order, then freeze.
+			m.gridOrder = nil
+			m.applyFilter()
 			log.Info("switched to grid view")
 		} else {
 			m.viewMode = ListView
+			m.gridOrder = nil
 			log.Info("switched to list view")
 		}
 		return m, nil
@@ -372,15 +439,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyApprove:
-		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Enter")
-			log.Info("approved %s", s.Name)
+		if s, ok := m.selectedSession(); ok {
+			if approvable(s.Status) {
+				tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Enter")
+				log.Info("approved %s (status=%s)", s.Name, s.Status)
+			} else {
+				log.Info("approve ignored: %s is %s", s.Name, s.Status)
+			}
 		}
 		return m, nil
 	case keyApproveAlways:
-		if s, ok := m.selectedSession(); ok && s.Status == models.StatusWaitingInput {
-			tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Down", "Enter")
-			log.Info("approved always %s", s.Name)
+		if s, ok := m.selectedSession(); ok {
+			if approvable(s.Status) {
+				tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Down", "Enter")
+				log.Info("approved always %s (status=%s)", s.Name, s.Status)
+			} else {
+				log.Info("approve-always ignored: %s is %s", s.Name, s.Status)
+			}
 		}
 		return m, nil
 	case keyUnload:
@@ -428,6 +503,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case SortByAgent:
 			m.sortMode = SortByStatus
 		}
+		// Clear the grid snapshot so the new sort order takes effect, then
+		// applyFilter re-snapshots and the grid freezes on that order.
+		m.gridOrder = nil
 		m.applyFilter()
 		log.Info("sort mode: %d", m.sortMode)
 		return m, nil
@@ -712,6 +790,16 @@ func (m *Model) countSaved() int {
 // --- Filtering & sorting ---
 
 func (m *Model) applyFilter() {
+	// Remember which session the cursor points at so we can restore the
+	// selection after rebuilding the filtered list. Without this, a background
+	// scan (every 2s) re-sorts and the cursor index silently slides onto a
+	// different session — making Ctrl+y approvals land on (or miss) the
+	// wrong target.
+	prevKey := ""
+	if s, ok := m.selectedSession(); ok {
+		prevKey = sessionKey(s)
+	}
+
 	// Start with visible sessions (hide saved unless toggled)
 	visible := m.sessions
 	if !m.showSaved {
@@ -724,11 +812,10 @@ func (m *Model) applyFilter() {
 	}
 
 	query := m.searchInput.Value()
-	if query == "" {
-		m.filtered = make([]models.Session, len(visible))
-		copy(m.filtered, visible)
-		m.sortFiltered()
-	} else {
+	queryChanged := query != m.lastQuery
+	m.lastQuery = query
+
+	if query != "" {
 		// Build search targets: "name path" for each session
 		targets := make([]string, len(visible))
 		for i, s := range visible {
@@ -740,9 +827,32 @@ func (m *Model) applyFilter() {
 		for i, match := range matches {
 			m.filtered[i] = visible[match.Index]
 		}
-		// fuzzy.Find returns results sorted by score (best first)
-		// so cursor 0 = best match
+	} else if m.viewMode == GridView && len(m.gridOrder) > 0 {
+		// Grid view with a live snapshot: preserve cell positions so scans
+		// don't shuffle the grid under the user's cursor. A fresh snapshot
+		// is taken on Tab-into-grid and on Ctrl+o sort cycles.
+		m.applyGridOrder(visible)
+	} else {
+		m.filtered = make([]models.Session, len(visible))
+		copy(m.filtered, visible)
+		m.sortFiltered()
+		if m.viewMode == GridView {
+			m.snapshotGridOrder()
+		}
+	}
+
+	// Cursor resolution: if the user just changed the query, jump to the top
+	// (best fuzzy match). Otherwise, follow the previously-selected session to
+	// its new index so background scans don't drift the selection.
+	if queryChanged {
 		m.cursor = 0
+	} else if prevKey != "" {
+		for i, s := range m.filtered {
+			if sessionKey(s) == prevKey {
+				m.cursor = i
+				break
+			}
+		}
 	}
 
 	if m.cursor >= len(m.filtered) {

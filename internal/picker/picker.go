@@ -89,7 +89,8 @@ type Model struct {
 	promptMode    bool
 	promptTarget  models.Session
 	promptInput   textinput.Model
-	lastQuery     string // previous search query, to detect query changes in applyFilter
+	lastQuery     string   // previous search query, to detect query changes in applyFilter
+	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
 }
 
 // New creates a new picker model with default settings.
@@ -143,6 +144,47 @@ func sessionKey(s models.Session) string {
 		return "saved:" + s.Name
 	}
 	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+}
+
+// snapshotGridOrder captures the current m.filtered order into gridOrder so
+// subsequent scans preserve cell positions in grid view.
+func (m *Model) snapshotGridOrder() {
+	m.gridOrder = make([]string, len(m.filtered))
+	for i, s := range m.filtered {
+		m.gridOrder[i] = sessionKey(s)
+	}
+}
+
+// applyGridOrder rebuilds m.filtered honoring the frozen gridOrder: existing
+// sessions keep their slot, sessions not in the snapshot (newly appeared) are
+// appended, and sessions no longer visible are dropped. gridOrder is updated
+// to the new final order.
+func (m *Model) applyGridOrder(visible []models.Session) {
+	byKey := make(map[string]models.Session, len(visible))
+	for _, s := range visible {
+		byKey[sessionKey(s)] = s
+	}
+
+	result := make([]models.Session, 0, len(visible))
+	order := make([]string, 0, len(visible))
+
+	for _, k := range m.gridOrder {
+		if s, ok := byKey[k]; ok {
+			result = append(result, s)
+			order = append(order, k)
+			delete(byKey, k)
+		}
+	}
+	for _, s := range visible {
+		k := sessionKey(s)
+		if _, still := byKey[k]; still {
+			result = append(result, s)
+			order = append(order, k)
+		}
+	}
+
+	m.filtered = result
+	m.gridOrder = order
 }
 
 // isStarred returns whether a session is starred in the registry.
@@ -363,9 +405,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyToggleView:
 		if m.viewMode == ListView {
 			m.viewMode = GridView
+			// Fresh snapshot: start grid from current sorted order, then freeze.
+			m.gridOrder = nil
+			m.applyFilter()
 			log.Info("switched to grid view")
 		} else {
 			m.viewMode = ListView
+			m.gridOrder = nil
 			log.Info("switched to list view")
 		}
 		return m, nil
@@ -446,6 +492,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case SortByAgent:
 			m.sortMode = SortByStatus
 		}
+		// Clear the grid snapshot so the new sort order takes effect, then
+		// applyFilter re-snapshots and the grid freezes on that order.
+		m.gridOrder = nil
 		m.applyFilter()
 		log.Info("sort mode: %d", m.sortMode)
 		return m, nil
@@ -754,11 +803,7 @@ func (m *Model) applyFilter() {
 	queryChanged := query != m.lastQuery
 	m.lastQuery = query
 
-	if query == "" {
-		m.filtered = make([]models.Session, len(visible))
-		copy(m.filtered, visible)
-		m.sortFiltered()
-	} else {
+	if query != "" {
 		// Build search targets: "name path" for each session
 		targets := make([]string, len(visible))
 		for i, s := range visible {
@@ -769,6 +814,18 @@ func (m *Model) applyFilter() {
 		m.filtered = make([]models.Session, len(matches))
 		for i, match := range matches {
 			m.filtered[i] = visible[match.Index]
+		}
+	} else if m.viewMode == GridView && len(m.gridOrder) > 0 {
+		// Grid view with a live snapshot: preserve cell positions so scans
+		// don't shuffle the grid under the user's cursor. A fresh snapshot
+		// is taken on Tab-into-grid and on Ctrl+o sort cycles.
+		m.applyGridOrder(visible)
+	} else {
+		m.filtered = make([]models.Session, len(visible))
+		copy(m.filtered, visible)
+		m.sortFiltered()
+		if m.viewMode == GridView {
+			m.snapshotGridOrder()
 		}
 	}
 

@@ -285,23 +285,45 @@ func truncate(s string, maxLen int) string {
 	return string(r[:maxLen]) + "..."
 }
 
-// resolveMySession determines the current session name from cwd.
-// Checks live tmux sessions first (authoritative), then falls back to registry.
+// resolveMySession determines the current session name.
+// Prefers TMUX_PANE (unambiguous when multiple agents share a cwd),
+// falling back to cwd match against live tmux sessions, then the registry.
 func resolveMySession() string {
+	paneID := os.Getenv("TMUX_PANE")
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "unknown"
+		cwd = ""
 	}
-	// Live tmux sessions are the source of truth
-	for _, s := range scanAll() {
-		if s.Path == cwd {
+
+	sessions := scanAll()
+
+	// 1. Match by pane_id (unambiguous when multiple agents share a cwd)
+	if paneID != "" {
+		for _, s := range sessions {
+			if s.PaneID == paneID {
+				return s.Name
+			}
+		}
+	}
+
+	// 2. Fall back to cwd match
+	if cwd != "" {
+		for _, s := range sessions {
+			if s.Path == cwd {
+				return s.Name
+			}
+		}
+	}
+
+	// 3. Fall back to registry
+	if cwd != "" {
+		reg := state.NewRegistry(state.DefaultRegistryPath())
+		if s := reg.FindByPath(cwd); s != nil {
 			return s.Name
 		}
 	}
-	// Fall back to registry (may be stale)
-	reg := state.NewRegistry(state.DefaultRegistryPath())
-	if s := reg.FindByPath(cwd); s != nil {
-		return s.Name
+	if cwd == "" {
+		return "unknown"
 	}
 	return filepath.Base(cwd)
 }

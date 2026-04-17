@@ -73,3 +73,55 @@ func TestParseAllPanesCapturesPaneID(t *testing.T) {
 		t.Errorf("PaneID = %q, want %q", panes[0].PaneID, "%7")
 	}
 }
+
+func TestComputeDisplayNames(t *testing.T) {
+	sess := "cosmo-ai"
+	panes := []PaneInfo{
+		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "terminal", PaneID: "%2"},
+		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "? claude", PaneID: "%1"},
+	}
+	got := ComputeDisplayNames(sess, panes)
+	if got["%1"] != "cosmo-ai/claude_01" {
+		t.Errorf("pane %%1 = %q, want cosmo-ai/claude_01", got["%1"])
+	}
+	if got["%2"] != "cosmo-ai/claude_02" {
+		t.Errorf("pane %%2 = %q, want cosmo-ai/claude_02", got["%2"])
+	}
+}
+
+func TestComputeDisplayNamesSinglePane(t *testing.T) {
+	got := ComputeDisplayNames("work", []PaneInfo{
+		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "zsh", PaneID: "%3"},
+	})
+	if got["%3"] != "work" {
+		t.Errorf("single pane name = %q, want work", got["%3"])
+	}
+}
+
+func TestComputeDisplayNamesCustomWindowName(t *testing.T) {
+	panes := []PaneInfo{
+		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "? claude", PaneID: "%1"},
+		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "planning", PaneID: "%2"},
+	}
+	got := ComputeDisplayNames("cosmo-ai", panes)
+	if got["%1"] != "cosmo-ai/claude_01" {
+		t.Errorf("pane %%1 = %q", got["%1"])
+	}
+	if got["%2"] != "cosmo-ai/planning" {
+		t.Errorf("pane %%2 = %q", got["%2"])
+	}
+}
+
+func TestComputeDisplayNamesMixedAgents(t *testing.T) {
+	panes := []PaneInfo{
+		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "zsh", PaneID: "%1"},
+		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentGemini, WindowName: "zsh", PaneID: "%2"},
+	}
+	got := ComputeDisplayNames("proj", panes)
+	if got["%1"] != "proj/claude_01" {
+		t.Errorf("pane %%1 = %q", got["%1"])
+	}
+	if got["%2"] != "proj/gemini_01" {
+		t.Errorf("pane %%2 = %q", got["%2"])
+	}
+}

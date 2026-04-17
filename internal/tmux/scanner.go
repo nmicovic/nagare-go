@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -161,6 +162,39 @@ func isCustomWindowName(windowName, sessionName string) bool {
 	return !autoWindowNames[windowName]
 }
 
+// ComputeDisplayNames returns a map from pane_id to display name for a set of
+// agent panes sharing a tmux session. When there's only one pane, the bare
+// session name is used. When multiple panes share the session, panes with a
+// custom window name use "{sessName}/{windowName}" and the rest get
+// "{sessName}/{agent}_NN" (1-based, per agent type, ordered by window/pane).
+func ComputeDisplayNames(sessName string, panes []PaneInfo) map[string]string {
+	result := make(map[string]string, len(panes))
+	if len(panes) == 1 {
+		result[panes[0].PaneID] = sessName
+		return result
+	}
+
+	sorted := make([]PaneInfo, len(panes))
+	copy(sorted, panes)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].WindowIndex != sorted[j].WindowIndex {
+			return sorted[i].WindowIndex < sorted[j].WindowIndex
+		}
+		return sorted[i].PaneIndex < sorted[j].PaneIndex
+	})
+
+	counts := make(map[models.AgentType]int)
+	for _, p := range sorted {
+		if isCustomWindowName(p.WindowName, sessName) {
+			result[p.PaneID] = sessName + "/" + p.WindowName
+			continue
+		}
+		counts[p.AgentType]++
+		result[p.PaneID] = fmt.Sprintf("%s/%s_%02d", sessName, p.AgentType, counts[p.AgentType])
+	}
+	return result
+}
+
 // gitBranch returns the current git branch for a directory, or "".
 func gitBranch(dir string) string {
 	cmd := exec.Command("git", "-C", dir, "branch", "--show-current")
@@ -194,6 +228,7 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 		if !ok {
 			continue
 		}
+		displayNames := ComputeDisplayNames(sess.Name, panes)
 		for _, pane := range panes {
 			hookState, hasHook := hookStates[sess.Path]
 
@@ -218,16 +253,8 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 			// Get git branch from working directory
 			details.GitBranch = gitBranch(sess.Path)
 
-			// Use window name as display name when multiple agents share a session,
-			// but skip auto-generated names (tmux prefixes them with "? " or
-			// uses the command name like "zsh", "bash").
-			displayName := sess.Name
-			if len(panes) > 1 && isCustomWindowName(pane.WindowName, sess.Name) {
-				displayName = pane.WindowName
-			}
-
 			result = append(result, models.Session{
-				Name:        displayName,
+				Name:        displayNames[pane.PaneID],
 				SessionID:   sess.SessionID,
 				SessionName: sess.Name,
 				Path:        sess.Path,

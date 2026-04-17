@@ -242,13 +242,39 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 
 // Helper functions
 
-func findSession(name string) (models.Session, error) {
-	for _, s := range scanAll() {
+// resolveSession finds a session by name. Exact match wins. If no exact match,
+// a prefix match on "{name}/..." is tried. Multiple prefix matches produce an
+// ambiguity error listing the candidates.
+func resolveSession(name string, sessions []models.Session) (models.Session, error) {
+	for _, s := range sessions {
 		if s.Name == name {
 			return s, nil
 		}
 	}
-	return models.Session{}, fmt.Errorf("session '%s' not found", name)
+	prefix := name + "/"
+	var matches []models.Session
+	for _, s := range sessions {
+		if strings.HasPrefix(s.Name, prefix) {
+			matches = append(matches, s)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return models.Session{}, fmt.Errorf("session '%s' not found", name)
+	case 1:
+		return matches[0], nil
+	default:
+		names := make([]string, len(matches))
+		for i, m := range matches {
+			names[i] = m.Name
+		}
+		return models.Session{}, fmt.Errorf("'%s' is ambiguous — matches %s. Please specify one.",
+			name, strings.Join(names, ", "))
+	}
+}
+
+func findSession(name string) (models.Session, error) {
+	return resolveSession(name, scanAll())
 }
 
 func truncate(s string, maxLen int) string {

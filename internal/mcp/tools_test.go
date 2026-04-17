@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/nemke/nagare-go/internal/models"
 )
 
 // TestSendMessage tests sending a message to react session
@@ -28,5 +31,54 @@ func TestListAgents(t *testing.T) {
 
 	if result == "" {
 		t.Error("Expected agent list")
+	}
+}
+
+func TestResolveSessionExact(t *testing.T) {
+	sessions := []models.Session{
+		{Name: "cosmo-ai"},
+		{Name: "cosmo-ai/claude_01"},
+	}
+	got, err := resolveSession("cosmo-ai", sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "cosmo-ai" {
+		t.Errorf("got %q", got.Name)
+	}
+}
+
+func TestResolveSessionPrefix(t *testing.T) {
+	sessions := []models.Session{{Name: "cosmo-ai/claude_01"}}
+	got, err := resolveSession("cosmo-ai", sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "cosmo-ai/claude_01" {
+		t.Errorf("got %q", got.Name)
+	}
+}
+
+func TestResolveSessionAmbiguous(t *testing.T) {
+	sessions := []models.Session{
+		{Name: "cosmo-ai/claude_01"},
+		{Name: "cosmo-ai/claude_02"},
+	}
+	_, err := resolveSession("cosmo-ai", sessions)
+	if err == nil {
+		t.Fatal("expected ambiguity error")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "cosmo-ai/claude_01") || !strings.Contains(err.Error(), "cosmo-ai/claude_02") {
+		t.Errorf("error should list candidates: %v", err)
+	}
+}
+
+func TestResolveSessionNotFound(t *testing.T) {
+	_, err := resolveSession("nope", []models.Session{{Name: "other"}})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected not-found error, got %v", err)
 	}
 }

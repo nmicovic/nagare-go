@@ -137,6 +137,17 @@ func (m Model) selectedSession() (models.Session, bool) {
 	return m.filtered[m.cursor], true
 }
 
+// approvable reports whether Ctrl+y should send Enter to a session in this
+// status. Includes StatusRunning because the hook state lags: Claude fires
+// PreToolUse ("working") first, then Notification/permission_prompt
+// ("waiting_input") once the dialog is actually rendered — the yellow→red
+// transition can take a few seconds. Allowing approval during "working"
+// covers that gap. Idle/dead/saved sessions are skipped so a stray Ctrl+y
+// doesn't submit an empty prompt or hit a shell.
+func approvable(status models.SessionStatus) bool {
+	return status == models.StatusWaitingInput || status == models.StatusRunning
+}
+
 // sessionKey returns a stable identifier for a session. The cursor tracks this
 // key across re-filters so the selection follows the session, not the index.
 func sessionKey(s models.Session) string {
@@ -429,21 +440,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyApprove:
 		if s, ok := m.selectedSession(); ok {
-			if s.Status == models.StatusWaitingInput {
+			if approvable(s.Status) {
 				tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Enter")
-				log.Info("approved %s", s.Name)
+				log.Info("approved %s (status=%s)", s.Name, s.Status)
 			} else {
-				log.Info("approve ignored: %s is %s, not waiting", s.Name, s.Status)
+				log.Info("approve ignored: %s is %s", s.Name, s.Status)
 			}
 		}
 		return m, nil
 	case keyApproveAlways:
 		if s, ok := m.selectedSession(); ok {
-			if s.Status == models.StatusWaitingInput {
+			if approvable(s.Status) {
 				tmux.RunTmux("send-keys", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex), "Down", "Enter")
-				log.Info("approved always %s", s.Name)
+				log.Info("approved always %s (status=%s)", s.Name, s.Status)
 			} else {
-				log.Info("approve-always ignored: %s is %s, not waiting", s.Name, s.Status)
+				log.Info("approve-always ignored: %s is %s", s.Name, s.Status)
 			}
 		}
 		return m, nil

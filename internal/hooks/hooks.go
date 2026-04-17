@@ -92,6 +92,7 @@ func Handle() {
 		State:            newState,
 		SessionID:        event.SessionID,
 		Cwd:              event.Cwd,
+		PaneID:           os.Getenv("TMUX_PANE"),
 		Event:            event.HookEventName,
 		NotificationType: event.NotificationType,
 		LastMessage:      event.LastAssistantMessage,

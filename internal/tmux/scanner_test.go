@@ -61,3 +61,15 @@ func TestParseAllPanes_IgnoresNonAgent(t *testing.T) {
 		t.Errorf("expected 0 agent sessions, got %d", len(panes))
 	}
 }
+
+func TestParseAllPanesCapturesPaneID(t *testing.T) {
+	raw := "work:0:0:claude:123:? claude:%7\n"
+	got := ParseAllPanes(raw)
+	panes := got["work"]
+	if len(panes) != 1 {
+		t.Fatalf("expected 1 pane, got %d", len(panes))
+	}
+	if panes[0].PaneID != "%7" {
+		t.Errorf("PaneID = %q, want %q", panes[0].PaneID, "%7")
+	}
+}

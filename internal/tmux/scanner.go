@@ -23,6 +23,7 @@ type PaneInfo struct {
 	PaneIndex   int
 	AgentType   models.AgentType
 	WindowName  string
+	PaneID      string
 }
 
 var agentProcesses = map[string]models.AgentType{
@@ -53,8 +54,9 @@ func ParseSessions(raw string) []RawSession {
 }
 
 // ParseAllPanes parses tmux list-panes -a output.
-// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}"
+// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}"
 // Returns agent panes grouped by session name.
+// Accepts 5-, 6-, or 7-field input for backward compatibility.
 func ParseAllPanes(raw string) map[string][]PaneInfo {
 	result := make(map[string][]PaneInfo)
 	for _, line := range strings.Split(raw, "\n") {
@@ -62,7 +64,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 6)
+		parts := strings.SplitN(line, ":", 7)
 		if len(parts) < 5 {
 			continue
 		}
@@ -74,6 +76,10 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		windowName := ""
 		if len(parts) >= 6 {
 			windowName = strings.TrimSpace(parts[5])
+		}
+		paneID := ""
+		if len(parts) >= 7 {
+			paneID = strings.TrimSpace(parts[6])
 		}
 
 		agentType, ok := agentProcesses[cmd]
@@ -89,6 +95,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 			PaneIndex:   paneIdx,
 			AgentType:   agentType,
 			WindowName:  windowName,
+			PaneID:      paneID,
 		})
 	}
 	return result
@@ -178,7 +185,7 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 	rawSessions := RunTmux("list-sessions", "-F", "#{session_name}:#{session_id}:#{session_path}")
 	sessions := ParseSessions(rawSessions)
 
-	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}")
+	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}")
 	allPanes := ParseAllPanes(rawPanes)
 
 	var result []models.Session
@@ -226,6 +233,7 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 				Path:        sess.Path,
 				WindowIndex: pane.WindowIndex,
 				PaneIndex:   pane.PaneIndex,
+				PaneID:      pane.PaneID,
 				Status:      status,
 				AgentType:   pane.AgentType,
 				Details:     details,

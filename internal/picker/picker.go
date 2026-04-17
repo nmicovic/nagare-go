@@ -639,8 +639,9 @@ func (m Model) openConfigEditor() tea.Cmd {
 
 func doScan(statesDir string) tea.Cmd {
 	return func() tea.Msg {
-		hookStates := state.LoadAllStates(statesDir)
-		sessions := tmux.ScanSessions(hookStates)
+		paneStates := state.LoadStatesByPaneID(statesDir)
+		cwdStates := state.LoadAllStates(statesDir)
+		sessions := tmux.ScanSessions(paneStates, cwdStates)
 		return SessionsUpdatedMsg(sessions)
 	}
 }

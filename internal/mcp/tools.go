@@ -15,7 +15,8 @@ import (
 
 // scanAll returns all agent sessions from tmux.
 func scanAll() []models.Session {
-	return tmux.ScanSessions(state.LoadAllStates(state.DefaultStatesDir()))
+	dir := state.DefaultStatesDir()
+	return tmux.ScanSessions(state.LoadStatesByPaneID(dir), state.LoadAllStates(dir))
 }
 
 // ListAgentsHandler scans tmux for agent sessions and returns formatted list.

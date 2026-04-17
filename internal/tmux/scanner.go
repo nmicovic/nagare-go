@@ -214,8 +214,10 @@ var hookStateMap = map[string]models.SessionStatus{
 }
 
 // ScanSessions discovers all agent sessions in tmux.
-// hookStates should be pre-loaded via state.LoadAllStates().
-func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
+// paneStates should be pre-loaded via state.LoadStatesByPaneID() and
+// cwdStates via state.LoadAllStates(). The scanner looks up hook state
+// by pane_id first; if not found, falls back to cwd.
+func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[string]models.SessionState) []models.Session {
 	rawSessions := RunTmux("list-sessions", "-F", "#{session_name}:#{session_id}:#{session_path}")
 	sessions := ParseSessions(rawSessions)
 
@@ -230,7 +232,14 @@ func ScanSessions(hookStates map[string]models.SessionState) []models.Session {
 		}
 		displayNames := ComputeDisplayNames(sess.Name, panes)
 		for _, pane := range panes {
-			hookState, hasHook := hookStates[sess.Path]
+			var hookState models.SessionState
+			var hasHook bool
+			if pane.PaneID != "" {
+				hookState, hasHook = paneStates[pane.PaneID]
+			}
+			if !hasHook {
+				hookState, hasHook = cwdStates[sess.Path]
+			}
 
 			var status models.SessionStatus
 			var lastMessage string

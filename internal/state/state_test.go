@@ -99,6 +99,36 @@ func TestLoadAllStates_ConflictNewerWins(t *testing.T) {
 	}
 }
 
+func TestLoadStatesByPaneID(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(s models.SessionState) {
+		if err := WriteState(dir, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(models.SessionState{SessionID: "a", Cwd: "/x", PaneID: "%1", State: "working", Timestamp: "2026-04-17T12:00:00Z"})
+	mustWrite(models.SessionState{SessionID: "b", Cwd: "/x", PaneID: "%2", State: "idle", Timestamp: "2026-04-17T12:00:01Z"})
+
+	got := LoadStatesByPaneID(dir)
+	if got["%1"].State != "working" {
+		t.Errorf("%%1 state = %q", got["%1"].State)
+	}
+	if got["%2"].State != "idle" {
+		t.Errorf("%%2 state = %q", got["%2"].State)
+	}
+}
+
+func TestLoadStatesByPaneIDSkipsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteState(dir, models.SessionState{SessionID: "a", Cwd: "/x", Timestamp: "2026-04-17T12:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadStatesByPaneID(dir)
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+}
+
 func TestWriteState(t *testing.T) {
 	dir := t.TempDir()
 	s := models.SessionState{

@@ -65,6 +65,56 @@ func LoadAllStates(dir string) map[string]models.SessionState {
 	return states
 }
 
+// LoadStatesByPaneID loads all state files from dir, keyed by PaneID.
+// State files without a PaneID are skipped. Conflict resolution matches
+// LoadAllStates: live beats dead, then newer timestamp wins.
+func LoadStatesByPaneID(dir string) map[string]models.SessionState {
+	states := make(map[string]models.SessionState)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return states
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+
+		var s models.SessionState
+		if err := json.Unmarshal(data, &s); err != nil {
+			continue
+		}
+
+		if s.PaneID == "" {
+			continue
+		}
+
+		existing, exists := states[s.PaneID]
+		if !exists {
+			states[s.PaneID] = s
+			continue
+		}
+
+		// Live beats dead
+		if existing.State == "dead" && s.State != "dead" {
+			states[s.PaneID] = s
+		} else if existing.State != "dead" && s.State == "dead" {
+			// Keep existing live state
+		} else if s.Timestamp > existing.Timestamp {
+			// Same liveness: newer wins
+			states[s.PaneID] = s
+		}
+	}
+
+	return states
+}
+
 // LoadStateByID loads a single state file by session ID. Returns zero value and false if not found.
 func LoadStateByID(dir, sessionID string) (models.SessionState, bool) {
 	path := filepath.Join(dir, sessionID+".json")

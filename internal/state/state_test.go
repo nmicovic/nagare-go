@@ -118,6 +118,58 @@ func TestLoadStatesByPaneID(t *testing.T) {
 	}
 }
 
+func TestLoadStatesByPaneID_ConflictLiveOverDead(t *testing.T) {
+	dir := t.TempDir()
+	writeState(t, dir, "dead.json", models.SessionState{
+		State:     "dead",
+		SessionID: "dead-id",
+		PaneID:    "%5",
+		Cwd:       "/home/user/project",
+		Event:     "SessionEnd",
+		Timestamp: "2026-03-29T12:00:00Z",
+	})
+	writeState(t, dir, "live.json", models.SessionState{
+		State:     "working",
+		SessionID: "live-id",
+		PaneID:    "%5",
+		Cwd:       "/home/user/project",
+		Event:     "UserPromptSubmit",
+		Timestamp: "2026-03-29T10:00:00Z",
+	})
+
+	states := LoadStatesByPaneID(dir)
+	s := states["%5"]
+	if s.State != "working" {
+		t.Errorf("live should beat dead: got %q", s.State)
+	}
+}
+
+func TestLoadStatesByPaneID_ConflictNewerWins(t *testing.T) {
+	dir := t.TempDir()
+	writeState(t, dir, "old.json", models.SessionState{
+		State:     "idle",
+		SessionID: "old-id",
+		PaneID:    "%5",
+		Cwd:       "/home/user/project",
+		Event:     "Stop",
+		Timestamp: "2026-03-29T10:00:00Z",
+	})
+	writeState(t, dir, "new.json", models.SessionState{
+		State:     "working",
+		SessionID: "new-id",
+		PaneID:    "%5",
+		Cwd:       "/home/user/project",
+		Event:     "UserPromptSubmit",
+		Timestamp: "2026-03-29T12:00:00Z",
+	})
+
+	states := LoadStatesByPaneID(dir)
+	s := states["%5"]
+	if s.State != "working" {
+		t.Errorf("newer should win: got %q", s.State)
+	}
+}
+
 func TestLoadStatesByPaneIDSkipsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteState(dir, models.SessionState{SessionID: "a", Cwd: "/x", Timestamp: "2026-04-17T12:00:00Z"}); err != nil {

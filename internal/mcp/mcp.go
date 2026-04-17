@@ -46,9 +46,15 @@ func MessagesDir() string {
 	return filepath.Join(home, ".local", "share", "nagare", "messages")
 }
 
+// sanitizeName replaces filesystem-unsafe characters in session names so they
+// can be used as directory components under MessagesDir.
+func sanitizeName(name string) string {
+	return strings.ReplaceAll(name, "/", "__")
+}
+
 // InboxDir returns a session's inbox directory.
 func InboxDir(sessionName string) string {
-	return filepath.Join(MessagesDir(), sessionName)
+	return filepath.Join(MessagesDir(), sanitizeName(sessionName))
 }
 
 // MessagePath returns the file path for a message.

@@ -193,7 +193,7 @@ func CheckMessagesHandler(mySession string) string {
 	dirs, _ := os.ReadDir(baseDir)
 	var responses []Message
 	for _, d := range dirs {
-		if !d.IsDir() || d.Name() == mySession {
+		if !d.IsDir() || d.Name() == sanitizeName(mySession) {
 			continue
 		}
 		msgs, _ := ListInbox(d.Name())

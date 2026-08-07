@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/nemke/nagare-go/internal/config"
@@ -39,7 +39,7 @@ func main() {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for {
 				m := picker.New()
-				p := tea.NewProgram(m, tea.WithAltScreen())
+				p := tea.NewProgram(m)
 				result, err := p.Run()
 				if err != nil {
 					return err
@@ -52,14 +52,14 @@ func main() {
 
 				switch pickerModel.Result().Action {
 				case picker.ActionNew:
-					form := tea.NewProgram(newsession.New(), tea.WithAltScreen())
+					form := tea.NewProgram(newsession.New())
 					if _, err := form.Run(); err != nil {
 						return err
 					}
 					// Loop back to picker after form closes
 					continue
 				case picker.ActionQuickProto:
-					form := tea.NewProgram(newsession.NewQuick(), tea.WithAltScreen())
+					form := tea.NewProgram(newsession.NewQuick())
 					if _, err := form.Run(); err != nil {
 						return err
 					}
@@ -98,7 +98,7 @@ func main() {
 
 			if len(args) == 0 {
 				// No path: launch interactive form
-				p := tea.NewProgram(newsession.New(), tea.WithAltScreen())
+				p := tea.NewProgram(newsession.New())
 				_, err := p.Run()
 				return err
 			}
@@ -120,7 +120,7 @@ func main() {
 		Use:   "notifs",
 		Short: "View notification history and settings",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := tea.NewProgram(notifs.New(), tea.WithAltScreen())
+			p := tea.NewProgram(notifs.New())
 			_, err := p.Run()
 			return err
 		},

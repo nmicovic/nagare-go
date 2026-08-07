@@ -3,7 +3,7 @@ package picker
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/lucasb-eyer/go-colorful"
 	"github.com/muesli/ansi"
 	"github.com/nemke/nagare-go/internal/models"

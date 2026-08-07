@@ -1,56 +1,162 @@
 package newsession
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/session"
+	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/theme"
 )
 
-// Model is the full new session form.
+const customPathSentinel = "__custom__"
+
+type formState struct {
+	path       string // sentinel or one of the preset options
+	customPath string // used only when path == customPathSentinel
+	name       string
+	agent      string
+	resume     bool
+}
+
+// Model is the full new-session form.
 type Model struct {
-	pathInput       textinput.Model
-	nameInput       textinput.Model
-	agent           string
-	continueSession bool
-	focus           int // 0=path, 1=name, 2=agent, 3=continue
-	suggestions     []string
-	sugCursor       int
-	lastPathValue   string // cached to avoid redundant ListDirectories
-	width           int
-	height          int
-	done            bool
-	result          string
-	err             error
+	form   *huh.Form
+	state  *formState
+	width  int
+	height int
+	err    error
+	done   bool
 }
 
 // New creates a new session form model.
 func New() Model {
-	pathTi := textinput.New()
-	pathTi.Placeholder = "~/Projects/my-project"
-	pathTi.Focus()
-	pathTi.Width = 40
-
-	nameTi := textinput.New()
-	nameTi.Placeholder = "my-project"
-	nameTi.Width = 40
-
-	return Model{
-		pathInput:       pathTi,
-		nameInput:       nameTi,
-		agent:           "claude",
-		continueSession: true,
-		focus:           0,
+	s := &formState{
+		agent:  "claude",
+		resume: true,
 	}
+
+	pathOptions := buildPathOptions()
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Project directory").
+				Description("Type to fuzzy-filter · Ctrl+n/Ctrl+p or ↑/↓ to navigate").
+				Options(pathOptions...).
+				Filtering(true).
+				Height(10).
+				Value(&s.path),
+		),
+		// Shown only when the user picks "Custom…" from the list above.
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Custom path").
+				Description("Type a full path (supports ~)").
+				Placeholder("~/Projects/my-project").
+				Value(&s.customPath),
+		).WithHideFunc(func() bool { return s.path != customPathSentinel }),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Session name").
+				Description("Leave empty to use the directory name").
+				Placeholder("my-project").
+				Value(&s.name),
+
+			huh.NewSelect[string]().
+				Title("Agent").
+				Options(huh.NewOptions("claude", "opencode", "gemini")...).
+				Value(&s.agent),
+
+			huh.NewConfirm().
+				Title("Continue previous session?").
+				Affirmative("Continue").
+				Negative("Fresh").
+				Value(&s.resume),
+		),
+	).WithTheme(formTheme()).WithShowHelp(true)
+
+	return Model{form: form, state: s}
+}
+
+// buildPathOptions collects candidate project directories from:
+//  1. The session registry, sorted by most recent access.
+//  2. Immediate subdirectories of the configured quick-project path.
+//
+// A sentinel "Custom…" option is appended so users can still enter an
+// arbitrary path that isn't in the list.
+func buildPathOptions() []huh.Option[string] {
+	seen := make(map[string]bool)
+	var paths []string
+
+	// Recent projects from registry.
+	reg := state.NewRegistry(state.DefaultRegistryPath())
+	recents := reg.ListAll()
+	sort.Slice(recents, func(i, j int) bool {
+		return recents[i].LastAccessed > recents[j].LastAccessed
+	})
+	for _, r := range recents {
+		p := session.ExpandPath(r.Path)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+
+	// Subdirectories of the quick-project root.
+	cfg, _ := config.Load()
+	root := session.ExpandPath(cfg.Picker.QuickProjectPath)
+	if entries, err := os.ReadDir(root); err == nil {
+		var subs []string
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			p := filepath.Join(root, e.Name())
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			subs = append(subs, p)
+		}
+		sort.Strings(subs)
+		paths = append(paths, subs...)
+	}
+
+	opts := make([]huh.Option[string], 0, len(paths)+1)
+	for _, p := range paths {
+		opts = append(opts, huh.NewOption(prettyPath(p), p))
+	}
+	opts = append(opts, huh.NewOption("Custom path…", customPathSentinel))
+	return opts
+}
+
+// prettyPath renders a path with $HOME collapsed to "~" for display.
+func prettyPath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == home {
+		return "~"
+	}
+	if strings.HasPrefix(p, home+string(os.PathSeparator)) {
+		return "~" + p[len(home):]
+	}
+	return p
 }
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return m.form.Init()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -58,219 +164,85 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
-
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		if msg.String() == "esc" {
+			return m, tea.Quit
+		}
 	}
 
-	return m, nil
-}
+	next, cmd := m.form.Update(msg)
+	if f, ok := next.(*huh.Form); ok {
+		m.form = f
+	}
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	if m.form.State == huh.StateCompleted && !m.done {
+		m.done = true
+		path := m.state.path
+		if path == customPathSentinel {
+			path = strings.TrimSpace(m.state.customPath)
+		}
+		name, err := session.Create(path, m.state.name, m.state.agent, m.state.resume)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		session.SwitchToSession(name)
 		return m, tea.Quit
-	case "tab":
-		m.focus = (m.focus + 1) % 4
-		m.updateFocus()
-		return m, nil
-	case "shift+tab":
-		m.focus = (m.focus + 3) % 4
-		m.updateFocus()
-		return m, nil
-	case "enter":
-		if m.focus == 0 && len(m.suggestions) > 0 {
-			// Accept suggestion
-			m.pathInput.SetValue(m.suggestions[m.sugCursor])
-			m.suggestions = nil
-			// Auto-fill name from path
-			base := filepath.Base(m.pathInput.Value())
-			if base != "" && m.nameInput.Value() == "" {
-				m.nameInput.SetValue(base)
-			}
-			m.focus = 1
-			m.updateFocus()
-			return m, nil
-		}
-		return m.submit()
-	case "up":
-		if m.focus == 0 && len(m.suggestions) > 0 {
-			if m.sugCursor > 0 {
-				m.sugCursor--
-			}
-			return m, nil
-		}
-	case "down":
-		if m.focus == 0 && len(m.suggestions) > 0 {
-			if m.sugCursor < len(m.suggestions)-1 {
-				m.sugCursor++
-			}
-			return m, nil
-		}
-	case "left":
-		if m.focus == 2 {
-			m.agent = cycleAgent(agents, m.agent, -1)
-			return m, nil
-		}
-		if m.focus == 3 {
-			m.continueSession = !m.continueSession
-			return m, nil
-		}
-	case "right":
-		if m.focus == 2 {
-			m.agent = cycleAgent(agents, m.agent, 1)
-			return m, nil
-		}
-		if m.focus == 3 {
-			m.continueSession = !m.continueSession
-			return m, nil
-		}
 	}
 
-	// Forward to focused text input
-	var cmd tea.Cmd
-	switch m.focus {
-	case 0:
-		m.pathInput, cmd = m.pathInput.Update(msg)
-		if v := m.pathInput.Value(); v != m.lastPathValue {
-			m.lastPathValue = v
-			m.suggestions = session.ListDirectories(v, 5)
-			m.sugCursor = 0
-		}
-	case 1:
-		m.nameInput, cmd = m.nameInput.Update(msg)
-	}
 	return m, cmd
 }
 
-func (m *Model) updateFocus() {
-	m.pathInput.Blur()
-	m.nameInput.Blur()
-
-	switch m.focus {
-	case 0:
-		m.pathInput.Focus()
-	case 1:
-		m.nameInput.Focus()
-	}
+func (m Model) View() tea.View {
+	v := tea.NewView(m.view())
+	v.AltScreen = true
+	return v
 }
 
-// resolvedPath returns the effective working directory that will be created,
-// mirroring the logic in session.Create so the user sees exactly where the
-// session will land before pressing Enter.
-func (m Model) resolvedPath() string {
-	path := m.pathInput.Value()
-	if path == "" {
-		return ""
-	}
-	name := m.nameInput.Value()
-	if name != "" {
-		path = filepath.Join(path, name)
-	}
-	return session.ExpandPath(session.ResolvePath(path))
-}
-
-func (m Model) submit() (tea.Model, tea.Cmd) {
-	path := m.pathInput.Value()
-	if path == "" {
-		return m, nil
-	}
-	name := m.nameInput.Value()
-
-	sessionName, err := session.Create(path, name, m.agent, m.continueSession)
-	if err != nil {
-		m.err = err
-		return m, nil
-	}
-
-	m.done = true
-	m.result = sessionName
-
-	// Switch to the session
-	session.SwitchToSession(sessionName)
-
-	return m, tea.Quit
-}
-
-func (m Model) View() string {
+func (m Model) view() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
 
 	c := theme.Current().Colors
-	title := renderTitle("New Session")
+	title := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render("New Session")
 
-	// Path field
-	pathField := "  Path:  " + m.pathInput.View()
-
-	// Suggestions
-	var sugStr string
-	if len(m.suggestions) > 0 && m.focus == 0 {
-		var sugLines []string
-		for i, s := range m.suggestions {
-			line := "    " + s
-			if i == m.sugCursor {
-				line = lipgloss.NewStyle().
-					Background(c.Primary).
-					Foreground(c.Background).
-					Render("  → " + s)
-			}
-			sugLines = append(sugLines, line)
-		}
-		sugStr = strings.Join(sugLines, "\n") + "\n"
+	body := m.form.View()
+	if m.err != nil {
+		body += "\n" + lipgloss.NewStyle().Foreground(c.Error).Render("Error: "+m.err.Error())
 	}
-
-	// Name field
-	nameField := "  Name:  " + m.nameInput.View()
-
-	// Resolved directory preview — show full target path + exists/new badge
-	var dirLine string
-	if rp := m.resolvedPath(); rp != "" {
+	if rp := m.resolvedPath(); rp != "" && m.form.State != huh.StateCompleted {
 		_, statErr := os.Stat(rp)
-		var badge string
+		badge := lipgloss.NewStyle().Foreground(c.Success).Render(" (exists)")
 		if os.IsNotExist(statErr) {
 			badge = lipgloss.NewStyle().Foreground(c.Warning).Render(" (will be created)")
-		} else {
-			badge = lipgloss.NewStyle().Foreground(c.Success).Render(" (exists)")
 		}
-		dirLine = "  →  " + lipgloss.NewStyle().Foreground(c.Accent).Bold(true).Render(rp) + badge
+		body += fmt.Sprintf("\n→ %s%s",
+			lipgloss.NewStyle().Foreground(c.Accent).Bold(true).Render(rp),
+			badge)
 	}
 
-	// Agent field
-	agentStr := renderAgentPicker(agents, m.agent, m.focus == 2)
+	box := lipgloss.NewStyle().
+		Background(c.Background).
+		Foreground(c.Foreground).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(c.Border).
+		Padding(1, 2).
+		Render(title + "\n\n" + body)
 
-	// Continue field
-	continueStr := "  "
-	if m.continueSession {
-		continueStr += "[x] Continue previous session"
-	} else {
-		continueStr += "[ ] Continue previous session"
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) resolvedPath() string {
+	path := m.state.path
+	if path == customPathSentinel {
+		path = strings.TrimSpace(m.state.customPath)
 	}
-	if m.focus == 3 {
-		continueStr = lipgloss.NewStyle().
-			Background(c.Primary).
-			Foreground(c.Background).
-			Render(continueStr)
+	if path == "" {
+		return ""
 	}
-
-	hint := renderHint("Enter: Create  Tab: Next  Esc: Cancel")
-	errStr := renderError(m.err)
-
-	content := strings.Join([]string{
-		"",
-		pathField,
-		sugStr,
-		nameField,
-		dirLine,
-		"",
-		agentStr,
-		"",
-		continueStr,
-		"",
-		errStr,
-		hint,
-	}, "\n")
-
-	return renderCenteredBox(title, content, m.width, m.height)
+	if m.state.name != "" {
+		path = filepath.Join(path, m.state.name)
+	}
+	return session.ExpandPath(session.ResolvePath(path))
 }

@@ -8,11 +8,10 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/log"
@@ -47,6 +46,7 @@ type PreviewUpdatedMsg string
 
 type tickScanMsg struct{}
 type tickPreviewMsg struct{}
+type tickPulseMsg struct{}
 type gridPreviewsMsg map[string]string
 
 // Picker exit actions.
@@ -91,6 +91,8 @@ type Model struct {
 	promptInput   textinput.Model
 	lastQuery     string   // previous search query, to detect query changes in applyFilter
 	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
+	pulseOn       bool     // 1Hz toggle used to breathe the status dot on running/waiting sessions
+	testNoScan    bool     // test hook: disable the live tmux scanner (see export_test.go)
 }
 
 // New creates a new picker model with default settings.
@@ -105,7 +107,7 @@ func New() Model {
 	pi := textinput.New()
 	pi.Placeholder = "type prompt to send..."
 	pi.CharLimit = 500
-	pi.Width = 60
+	pi.SetWidth(60)
 
 	cfg, _ := config.Load()
 
@@ -210,10 +212,22 @@ func (m Model) Result() Result {
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.testNoScan {
+		return nil
+	}
 	return tea.Batch(
 		doScan(m.statesDir),
 		doPreviewTick(),
+		doPulseTick(),
 	)
+}
+
+// doPulseTick fires once per second. The handler flips a bool that the
+// status-dot renderer consults to alternate Faint on running/waiting
+// sessions — a low-amplitude "breathing" pulse that reads as active work
+// without the noise of a spinning cursor.
+func doPulseTick() tea.Cmd {
+	return tea.Tick(1*time.Second, func(time.Time) tea.Msg { return tickPulseMsg{} })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -228,6 +242,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
+		if m.testNoScan {
+			return m, nil
+		}
 		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
 
 	case PreviewUpdatedMsg:
@@ -243,6 +260,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickPreviewMsg:
 		return m, m.doPreview()
+
+	case tickPulseMsg:
+		m.pulseOn = !m.pulseOn
+		return m, doPulseTick()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -279,15 +300,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
+	content := m.view()
+	// Last line of defense. Every panel is already pinned with fitBox, but a
+	// frame even one row too tall scrolls the alt screen and smears the whole
+	// UI, so clamp the assembled frame rather than trusting the arithmetic.
+	if m.width > 0 && m.height > 0 {
+		content = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content)
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
+}
+
+func (m Model) view() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
 
-	// Render base content
+	// Render the help bar first and measure it. It soft-wraps, and how many
+	// lines it takes depends on the terminal width — assuming a fixed two
+	// pushed the panels off the bottom of a narrow terminal.
+	bar := ""
 	contentHeight := m.height
 	if m.showHelpBar {
-		contentHeight = m.height - 2 // help bar can wrap to 2 lines
+		bar = helpBar(m.width)
+		contentHeight = m.height - lipgloss.Height(bar)
+		if contentHeight < 1 {
+			contentHeight = 1
+		}
 	}
 
 	var base string
@@ -302,7 +343,7 @@ func (m Model) View() string {
 	}
 
 	if m.showHelpBar {
-		base = base + "\n" + helpBar(m.width)
+		base = base + "\n" + bar
 	}
 
 	// Overlays drawn on top of base content
@@ -337,7 +378,7 @@ func (m Model) renderPromptOverlay() string {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
-	log.Debug("key: %q type=%d", key, msg.Type)
+	log.Debug("key: %q", key)
 
 	// Theme picker intercepts all keys when open
 	if m.showThemePick {
@@ -903,6 +944,38 @@ func statusOrder(s models.SessionStatus) int {
 
 // --- View rendering ---
 
+// renderStats renders the header line above the search box. Each count is
+// tinted with the same color as its status dot, so the eye can read "is
+// anything waiting on me?" from color alone without parsing the numbers.
+// Zero counts are omitted rather than rendered as "0 waiting" noise.
+func (m Model) renderStats(live, waiting, running, saved int) string {
+	c := theme.Current().Colors
+
+	shown := live
+	if m.showSaved {
+		shown += saved
+	}
+
+	parts := []string{
+		lipgloss.NewStyle().Foreground(c.Foreground).Render(fmt.Sprintf("%d sessions", shown)),
+	}
+	count := func(n int, label string, status models.SessionStatus) {
+		if n == 0 {
+			return
+		}
+		styled := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(status)))
+		parts = append(parts, styled.Render(fmt.Sprintf("%d %s", n, label)))
+	}
+	count(waiting, "waiting", models.StatusWaitingInput)
+	count(running, "running", models.StatusRunning)
+	if saved > 0 && !m.showSaved {
+		parts = append(parts, mutedStyle().Render(fmt.Sprintf("%d saved", saved)))
+	}
+
+	sep := mutedStyle().Render(" · ")
+	return " " + strings.Join(parts, sep)
+}
+
 func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	innerWidth := outerWidth - 4
 	if innerWidth < 10 {
@@ -911,19 +984,25 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 
 	var b strings.Builder
 
-	// Dashboard stats
-	total := len(m.sessions)
-	waiting := 0
-	running := 0
+	// Dashboard stats. Counts describe what the list actually shows: saved
+	// sessions are hidden unless toggled, so folding them into "N sessions"
+	// made the header disagree with the rows underneath it (34 sessions,
+	// three visible). Saved sessions get their own muted count instead.
+	live, waiting, running, saved := 0, 0, 0, 0
 	for _, s := range m.sessions {
 		switch s.Status {
+		case models.StatusSaved:
+			saved++
 		case models.StatusWaitingInput:
 			waiting++
 		case models.StatusRunning:
 			running++
 		}
+		if s.Status != models.StatusSaved {
+			live++
+		}
 	}
-	b.WriteString(mutedStyle().Render(fmt.Sprintf(" %d sessions | %d waiting | %d running", total, waiting, running)))
+	b.WriteString(m.renderStats(live, waiting, running, saved))
 	b.WriteString("\n\n")
 
 	// Search input (always active)
@@ -935,12 +1014,14 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	b.WriteString(m.searchInput.View())
 	b.WriteString("\n\n")
 
-	// Session list
-	// lipgloss Height(H) = post-padding, pre-border height; outer = H+2.
-	// Pass Height(outerHeight-2) so outer panel = outerHeight.
-	// Inner content = (outerHeight-2) - vertical_padding(2) = outerHeight-4.
-	// Content above list: stats (1) + blank (1) + search (1) + blank (1) = 4
-	listHeight := outerHeight - 8
+	// Session list.
+	// In lipgloss v2, Width/Height are the TOTAL rendered size — border and
+	// padding included. (v1 excluded the border, which is why the old
+	// Height(outerHeight-2) calls here left the panel two rows short of the
+	// terminal and bled the backdrop through at the bottom.)
+	// Content area = outerHeight - border(2) - vertical padding(2).
+	// Content above the list: stats (1) + blank (1) + search (1) + blank (1).
+	listHeight := outerHeight - 4 - 4
 	if listHeight < 1 {
 		listHeight = 1
 	}
@@ -951,9 +1032,10 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 		b.WriteString(m.renderGridView(innerWidth, listHeight))
 	}
 
-	return panelStyle().
-		Width(outerWidth - 2).
-		Height(outerHeight - 2).
+	// The list is where keystrokes land, so it uses the accent-bordered
+	// primary panel. Other panels (preview, details, empty states) stay
+	// on the quieter Border color.
+	return fitBox(primaryPanelStyle(), outerWidth, outerHeight).
 		Render(b.String())
 }
 
@@ -976,50 +1058,58 @@ func (m Model) renderListView(width, height int) string {
 	var lines []string
 	for i := start; i < end; i++ {
 		s := m.filtered[i]
-		dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
+		dot := statusDot(s.Status, m.pulseOn)
 		badge := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
 			Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
 			Padding(0, 1).
 			Render(models.AgentLabel(s.AgentType))
 
-		name := s.Name
-		maxName := width - 20
-		if maxName < 5 {
-			maxName = 5
-		}
-		if utf8.RuneCountInString(name) > maxName {
-			runes := []rune(name)
-			name = string(runes[:maxName]) + "..."
-		}
-
 		star := ""
 		if m.isStarred(s.Name) {
-			star = " ★"
+			star = "★ "
 		}
+		starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
 
-		var line string
-		if i == m.cursor {
-			cursor := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render(">")
-			nameStyled := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render(name)
-			starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
-			content := fmt.Sprintf(" %s %s %s %s%s", cursor, dot, nameStyled, badge, starStyled)
-			line = lipgloss.NewStyle().
-				Background(c.Background).
-				PaddingLeft(1).
-				Width(width).
-				Render(content)
-		} else {
-			nameStyled := lipgloss.NewStyle().Foreground(c.Foreground).Render(name)
-			starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
-			content := fmt.Sprintf(" %s %s %s%s", dot, nameStyled, badge, starStyled)
-			line = lipgloss.NewStyle().
-				Background(c.Background).
-				Foreground(c.Foreground).
-				PaddingLeft(2).
-				Width(width).
-				Render(content)
+		// Row layout: a left cluster (status dot + name) and a right cluster
+		// (star + agent badge) pinned to the right edge. Right-aligning the
+		// badges lines them up in a clean gutter instead of letting them
+		// float at ragged offsets that vary with each name's length — and it
+		// hands every spare column to the name. The star sits inside the
+		// cluster ahead of the badge so a starred row does not shunt its
+		// badge out of the shared column.
+		right := starStyled + badge
+		// Columns the row spends on anything that is not the name: leading
+		// space, the dot, the space after it, the right cluster, at least one
+		// space separating name from badge, and a trailing gutter column.
+		fixed := 1 + lipgloss.Width(dot) + 1 + 1 + lipgloss.Width(right) + rowGutter
+		maxName := width - fixed
+		if maxName < minNameWidth {
+			maxName = minNameWidth
 		}
+		name := truncate(s.Name, maxName)
+
+		// Selection: tint the row background (crush / lazygit / gh-dash
+		// convention) — no caret or gutter rune. Bold the text for an
+		// extra hierarchy cue. The tint color is per-theme (SelBg), so
+		// every theme controls exactly how loud its selection reads.
+		rowBg := c.Background
+		nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
+		if i == m.cursor {
+			rowBg = c.SelBg
+			nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
+		}
+		nameStyled := renderNameWithMatches(name, s.Name, m.searchInput.Value(), nameStyle, c.Accent)
+
+		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
+		if gap < 1 {
+			gap = 1
+		}
+		content := fmt.Sprintf(" %s %s%s%s", dot, nameStyled, strings.Repeat(" ", gap), right)
+		line := lipgloss.NewStyle().
+			Background(rowBg).
+			Width(width).
+			Render(content)
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
@@ -1045,24 +1135,27 @@ func (m Model) renderGridView(width, height int) string {
 		for j := 0; j < cols && i+j < len(m.filtered); j++ {
 			idx := i + j
 			s := m.filtered[idx]
-			dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
-			name := s.Name
-			maxLen := cellWidth - 6
-			if utf8.RuneCountInString(name) > maxLen {
-				runes := []rune(name)
-				name = string(runes[:maxLen]) + ".."
+			dot := statusDot(s.Status, m.pulseOn)
+			// Leading space, dot, separating space, trailing gutter.
+			maxLen := cellWidth - 3 - rowGutter
+			if maxLen < minNameWidth {
+				maxLen = minNameWidth
 			}
-			content := fmt.Sprintf(" %s %s", dot, name)
-			var cell string
+			name := truncate(s.Name, maxLen)
+			// Selection: tint the cell background; same palette slot as the
+			// list view so the two modes read consistently.
+			cellBg := c.Background
+			nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
 			if idx == m.cursor {
-				cell = lipgloss.NewStyle().
-					Background(c.Primary).Foreground(c.Background).Bold(true).
-					Width(cellWidth).Render(content)
-			} else {
-				cell = lipgloss.NewStyle().
-					Background(c.Background).Foreground(c.Foreground).
-					Width(cellWidth).Render(content)
+				cellBg = c.SelBg
+				nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
 			}
+			nameStyled := renderNameWithMatches(name, s.Name, m.searchInput.Value(), nameStyle, c.Accent)
+			content := fmt.Sprintf(" %s %s", dot, nameStyled)
+			cell := lipgloss.NewStyle().
+				Background(cellBg).
+				Width(cellWidth).
+				Render(content)
 			cells = append(cells, cell)
 		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
@@ -1072,9 +1165,7 @@ func (m Model) renderGridView(width, height int) string {
 
 func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
-		return panelStyle().
-			Width(outerWidth - 2).
-			Height(outerHeight - 2).
+		return fitBox(panelStyle(), outerWidth, outerHeight).
 			Render(mutedStyle().Render("No session selected"))
 	}
 
@@ -1137,9 +1228,9 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		detail.WriteString(info.String())
 	}
 
-	// Size detail panel to fit its content exactly.
-	// lipgloss outer = Height+2 (border), inner = Height - padding_v(2) = Height-2.
-	// So outer = content_lines + 4 (padding 2 + border 2).
+	// Size detail panel to fit its content exactly. lipgloss v2 Height is the
+	// total rendered height, so it must cover the content plus this style's
+	// vertical padding (2) and border (2).
 	detailContent := detail.String()
 	detailLines := strings.Count(detailContent, "\n") + 1
 	detailOuter := detailLines + 4
@@ -1159,9 +1250,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		detailOuter = 6
 	}
 
-	detailStr := panelStyle().
-		Width(outerWidth - 2).
-		Height(detailOuter - 2).
+	detailStr := fitBox(panelStyle(), outerWidth, detailOuter).
 		Render(detailContent)
 
 	// Preview section: gets the remaining height.
@@ -1196,9 +1285,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		previewContent = strings.Join(lines, "\n")
 	}
 
-	previewStr := previewPanelStyle().
-		Width(outerWidth - 2).
-		Height(previewOuter - 2).
+	previewStr := fitBox(previewPanelStyle(), outerWidth, previewOuter).
 		Render(previewContent)
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
@@ -1220,9 +1307,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 	c := theme.Current().Colors
 
 	if len(m.filtered) == 0 {
-		return panelStyle().
-			Width(totalWidth - 2).
-			Height(totalHeight - 2).
+		return fitBox(panelStyle(), totalWidth, totalHeight).
 			Render(mutedStyle().Render("No sessions found"))
 	}
 
@@ -1246,7 +1331,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 			s := m.filtered[idx]
 
 			// Header: status dot + name + agent badge
-			dot := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render("●")
+			dot := statusDot(s.Status, m.pulseOn)
 			statusLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render(models.StatusLabel(s.Status))
 			agentBadge := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
@@ -1297,16 +1382,14 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 				borderColor = c.Primary
 			}
 
-			cell := lipgloss.NewStyle().
+			cellStyle := lipgloss.NewStyle().
 				Background(c.Background).
 				Foreground(c.Foreground).
 				BorderStyle(lipgloss.RoundedBorder()).
 				BorderForeground(borderColor).
 				BorderBackground(c.Background).
-				Width(cellWidth - 2).
-				Height(cellHeight - 2).
-				Padding(1).
-				Render(content)
+				Padding(1)
+			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(content)
 
 			cells = append(cells, cell)
 		}

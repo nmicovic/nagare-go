@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/nemke/nagare-go/internal/theme"
 )
 
@@ -55,17 +55,18 @@ func helpBar(width int) string {
 func helpOverlay(width, height int) string {
 	c := theme.Current().Colors
 
-	title := lipgloss.NewStyle().
-		Foreground(c.Primary).
-		Bold(true).
-		Render("Keyboard Shortcuts")
+	// Inner width after the outer dialog's border (2 cols) and padding
+	// (2*4 horizontal). Section fill lines match that width.
+	innerWidth := width*2/3 - 10
+
+	title := sectionHeader("Keyboard Shortcuts", innerWidth)
 
 	section := func(name string) string {
-		return "\n" + lipgloss.NewStyle().Foreground(c.Accent).Bold(true).Render(name) + "\n"
+		return "\n" + sectionHeader(name, innerWidth) + "\n"
 	}
 
 	key := func(k string) string {
-		return lipgloss.NewStyle().Foreground(c.Primary).Width(14).Render(k)
+		return lipgloss.NewStyle().Foreground(c.Accent).Width(14).Render(k)
 	}
 
 	desc := func(d string) string {

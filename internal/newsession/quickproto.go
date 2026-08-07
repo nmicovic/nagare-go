@@ -3,39 +3,53 @@ package newsession
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/nemke/nagare-go/internal/session"
+	"github.com/nemke/nagare-go/internal/theme"
 )
 
-// QuickModel is the quick prototype form (name + agent only).
+// QuickModel is the quick-prototype form (name + agent only).
 type QuickModel struct {
-	nameInput textinput.Model
-	agent     string
-	focus     int // 0=name, 1=agent
-	width     int
-	height    int
-	done      bool
-	result    string
-	err       error
+	form   *huh.Form
+	state  *formState
+	width  int
+	height int
+	err    error
+	done   bool
 }
 
-// NewQuick creates a new quick prototype form model.
+// NewQuick creates a quick-prototype form model.
 func NewQuick() QuickModel {
-	nameTi := textinput.New()
-	nameTi.Placeholder = "my-prototype"
-	nameTi.Focus()
-	nameTi.Width = 30
+	s := &formState{agent: "claude"}
 
-	return QuickModel{
-		nameInput: nameTi,
-		agent:     "claude",
-		focus:     0,
-	}
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Prototype name").
+				Placeholder("my-prototype").
+				Value(&s.name).
+				Validate(func(v string) error {
+					if strings.TrimSpace(v) == "" {
+						return errEmptyName
+					}
+					return nil
+				}),
+
+			huh.NewSelect[string]().
+				Title("Agent").
+				Options(huh.NewOptions("claude", "opencode")...).
+				Value(&s.agent),
+		),
+	).WithTheme(formTheme()).WithShowHelp(true)
+
+	return QuickModel{form: form, state: s}
 }
 
 func (m QuickModel) Init() tea.Cmd {
-	return textinput.Blink
+	return m.form.Init()
 }
 
 func (m QuickModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -43,92 +57,58 @@ func (m QuickModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
-
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		if msg.String() == "esc" {
+			return m, tea.Quit
+		}
 	}
 
-	return m, nil
-}
+	next, cmd := m.form.Update(msg)
+	if f, ok := next.(*huh.Form); ok {
+		m.form = f
+	}
 
-func (m QuickModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	if m.form.State == huh.StateCompleted && !m.done {
+		m.done = true
+		name := strings.TrimSpace(m.state.name)
+		sessionName, err := session.Create(name, name, m.state.agent, false)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		session.SwitchToSession(sessionName)
 		return m, tea.Quit
-	case "tab":
-		m.focus = (m.focus + 1) % 2
-		m.updateFocus()
-		return m, nil
-	case "enter":
-		return m.submit()
-	case "left":
-		if m.focus == 1 {
-			m.agent = cycleAgent(quickAgents, m.agent, -1)
-		}
-		return m, nil
-	case "right":
-		if m.focus == 1 {
-			m.agent = cycleAgent(quickAgents, m.agent, 1)
-		}
-		return m, nil
 	}
 
-	// Forward to focused text input
-	var cmd tea.Cmd
-	if m.focus == 0 {
-		m.nameInput, cmd = m.nameInput.Update(msg)
-	}
 	return m, cmd
 }
 
-func (m *QuickModel) updateFocus() {
-	if m.focus == 0 {
-		m.nameInput.Focus()
-	} else {
-		m.nameInput.Blur()
-	}
+func (m QuickModel) View() tea.View {
+	v := tea.NewView(m.view())
+	v.AltScreen = true
+	return v
 }
 
-func (m QuickModel) submit() (tea.Model, tea.Cmd) {
-	name := strings.TrimSpace(m.nameInput.Value())
-	if name == "" {
-		return m, nil
-	}
-
-	// Quick prototype always creates fresh (no continue)
-	sessionName, err := session.Create(name, name, m.agent, false)
-	if err != nil {
-		m.err = err
-		return m, nil
-	}
-
-	m.done = true
-	m.result = sessionName
-
-	// Switch to the session
-	session.SwitchToSession(sessionName)
-
-	return m, tea.Quit
-}
-
-func (m QuickModel) View() string {
+func (m QuickModel) view() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
 
-	title := renderTitle("Quick Prototype")
-	nameField := "  Name:  " + m.nameInput.View()
+	c := theme.Current().Colors
+	title := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render("Quick Prototype")
 
-	content := strings.Join([]string{
-		"",
-		nameField,
-		"",
-		renderAgentPicker(quickAgents, m.agent, m.focus == 1),
-		"",
-		renderError(m.err),
-		renderHint("Enter: Create  Tab: Next  Esc: Cancel"),
-	}, "\n")
+	body := m.form.View()
+	if m.err != nil {
+		body += "\n" + lipgloss.NewStyle().Foreground(c.Error).Render("Error: "+m.err.Error())
+	}
 
-	return renderCenteredBox(title, content, m.width, m.height)
+	box := lipgloss.NewStyle().
+		Background(c.Background).
+		Foreground(c.Foreground).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(c.Border).
+		Padding(1, 2).
+		Render(title + "\n\n" + body)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }

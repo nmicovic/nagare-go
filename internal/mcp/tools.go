@@ -65,10 +65,10 @@ func SendMessageHandler(mySession string, input SendMessageInput) string {
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Nudge target — informational only, no reply expected
-	nudge := fmt.Sprintf("FYI: '%s' sent you a message. Call check_messages() when convenient. No reply needed.", mySession)
-	paneTarget := tmux.PaneTarget(session.Name, session.WindowIndex, session.PaneIndex)
-	tmux.RunTmux("send-keys", "-t", paneTarget, nudge, "Enter")
+	// Nudge target — act on the message immediately, no reply expected
+	nudge := fmt.Sprintf("URGENT: '%s' just sent you a message. Stop what you are doing, call check_messages() right now to read it, and act on it immediately. No reply needed, but the message itself may require action.", mySession)
+	paneTarget := paneTargetFor(session)
+	sendNudge(paneTarget, nudge)
 
 	// Write as delivered (single write)
 	msg.Status = StatusDelivered
@@ -114,8 +114,8 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 
 	// Nudge target — reply required
 	nudge := fmt.Sprintf("URGENT: '%s' sent you a message that requires a reply. Call check_messages() to read it, then reply() to respond.", mySession)
-	paneTarget := tmux.PaneTarget(session.Name, session.WindowIndex, session.PaneIndex)
-	tmux.RunTmux("send-keys", "-t", paneTarget, nudge, "Enter")
+	paneTarget := paneTargetFor(session)
+	sendNudge(paneTarget, nudge)
 
 	// Write as delivered (single write)
 	msg.Status = StatusDelivered
@@ -241,6 +241,26 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 }
 
 // Helper functions
+
+// sendNudge sends a text nudge then Enter to a tmux pane as two separate
+// send-keys calls. Agent TUIs (Claude Code, etc.) debounce input — if the
+// text and Enter arrive in one burst, they treat Enter as a newline inside
+// the input buffer rather than a submit. The `-l` flag sends the text
+// literally so a nudge containing a tmux key name (e.g. "Enter") isn't
+// interpreted as a key.
+func sendNudge(paneTarget, text string) {
+	tmux.RunTmux("send-keys", "-t", paneTarget, "-l", text)
+	time.Sleep(50 * time.Millisecond)
+	tmux.RunTmux("send-keys", "-t", paneTarget, "Enter")
+}
+
+// paneTargetFor builds a tmux pane target for a discovered session. It uses
+// SessionName (the real tmux session) rather than Name (the display name,
+// which can contain "/" for multi-pane disambiguation and is not a valid
+// tmux target).
+func paneTargetFor(s models.Session) string {
+	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+}
 
 // resolveSession finds a session by name. Exact match wins. If no exact match,
 // a prefix match on "{name}/..." is tried. Multiple prefix matches produce an

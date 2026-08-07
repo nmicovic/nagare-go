@@ -82,3 +82,22 @@ func TestResolveSessionNotFound(t *testing.T) {
 		t.Errorf("expected not-found error, got %v", err)
 	}
 }
+
+// TestPaneTargetForUsesSessionName locks in the invariant that pane targets
+// are built from SessionName (the real tmux session), not Name (the display
+// name which can contain "/" for multi-pane disambiguation).
+func TestPaneTargetForUsesSessionName(t *testing.T) {
+	s := models.Session{
+		Name:        "cosmo-ai/claude_02",
+		SessionName: "cosmo-ai",
+		WindowIndex: 1,
+		PaneIndex:   0,
+	}
+	got := paneTargetFor(s)
+	if got != "cosmo-ai:1.0" {
+		t.Errorf("paneTargetFor = %q, want cosmo-ai:1.0", got)
+	}
+	if strings.Contains(got, "/") {
+		t.Errorf("pane target leaked display-name slash: %q", got)
+	}
+}

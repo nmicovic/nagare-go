@@ -2,24 +2,36 @@ package theme
 
 import (
 	"fmt"
+	"image/color"
 	"sort"
 	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
 )
 
 // Colors holds all semantic colors for a theme.
 type Colors struct {
-	Background lipgloss.AdaptiveColor
-	Foreground lipgloss.AdaptiveColor
-	Primary    lipgloss.AdaptiveColor
-	Secondary  lipgloss.AdaptiveColor
-	Accent     lipgloss.AdaptiveColor
-	Muted      lipgloss.AdaptiveColor
-	Border     lipgloss.AdaptiveColor
-	Error      lipgloss.AdaptiveColor
-	Warning    lipgloss.AdaptiveColor
-	Success    lipgloss.AdaptiveColor
+	Background color.Color
+	Foreground color.Color
+	Primary    color.Color
+	Secondary  color.Color
+	Accent     color.Color
+	Muted      color.Color
+	Border     color.Color
+	SelBg      color.Color // background for the selected row/cell; subtly elevated from Background
+	Error      color.Color
+	Warning    color.Color
+	Success    color.Color
+}
+
+// adapt builds a light/dark-aware color from two hex strings. Themes use this
+// helper to keep palette declarations terse.
+func adapt(dark, light string) color.Color {
+	return compat.AdaptiveColor{
+		Dark:  lipgloss.Color(dark),
+		Light: lipgloss.Color(light),
+	}
 }
 
 // Theme is a named color palette.
@@ -87,4 +99,3 @@ func Get(name string) *Theme {
 	defer mu.RUnlock()
 	return all[name]
 }
-

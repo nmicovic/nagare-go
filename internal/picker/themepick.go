@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/theme"
 )
@@ -37,10 +37,10 @@ func (m Model) handleThemePickKey(key string) (tea.Model, tea.Cmd) {
 func themePickOverlay(names []string, cursor int, width, height int) string {
 	c := theme.Current().Colors
 
-	title := titleStyle().Render("Select Theme")
-	hint := mutedStyle().Render("↑/↓ preview  Enter confirm  Esc cancel")
-
 	itemWidth := 24
+	title := sectionHeader("Select Theme", itemWidth)
+	hint := mutedStyle().Render("↑/↓ preview · Enter confirm · Esc cancel")
+
 	lines := []string{title, ""}
 
 	for i, name := range names {
@@ -59,8 +59,8 @@ func themePickOverlay(names []string, cursor int, width, height int) string {
 		label := fmt.Sprintf("  %s  %s", name, swatch)
 		style := lipgloss.NewStyle().Foreground(c.Foreground).Width(itemWidth)
 		if i == cursor {
-			style = lipgloss.NewStyle().
-				Background(c.Primary).Foreground(c.Background).Bold(true).Width(itemWidth)
+			// Match the list/grid convention: background tint only, no caret.
+			style = style.Background(c.SelBg).Bold(true)
 		}
 		lines = append(lines, style.Render(label))
 	}
@@ -68,8 +68,8 @@ func themePickOverlay(names []string, cursor int, width, height int) string {
 	lines = append(lines, "", hint)
 
 	return dialogStyle().
-		Width(itemWidth + 8).
-		Height(len(names) + 8).
+		Width(itemWidth+8).
+		Height(len(names)+8).
 		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 }

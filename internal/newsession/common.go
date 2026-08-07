@@ -1,79 +1,52 @@
 package newsession
 
 import (
-	"slices"
-	"strings"
+	"errors"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
+
 	"github.com/nemke/nagare-go/internal/theme"
 )
 
-var agents = []string{"claude", "opencode", "gemini"}
+var errEmptyName = errors.New("name is required")
 
-func cycleAgent(available []string, current string, delta int) string {
-	idx := slices.Index(available, current)
-	if idx < 0 {
-		return available[0]
-	}
-	idx = (idx + delta + len(available)) % len(available)
-	return available[idx]
-}
+// nagareFormTheme implements huh.Theme by building a *huh.Styles on demand
+// from the active nagare theme. Honours the terminal's dark/light preference
+// via the isDark flag that huh passes in at render time.
+type nagareFormTheme struct{}
 
-// quickAgents is the subset for quick prototype (no gemini).
-var quickAgents = []string{"claude", "opencode"}
-
-func renderAgentPicker(available []string, selected string, focused bool) string {
+func (nagareFormTheme) Theme(isDark bool) *huh.Styles {
+	t := huh.ThemeBase(isDark)
 	c := theme.Current().Colors
 
-	var opts []string
-	for _, a := range available {
-		if a == selected {
-			opts = append(opts, "(●) "+a)
-		} else {
-			opts = append(opts, "( ) "+a)
-		}
-	}
-	str := "  Agent: " + strings.Join(opts, "  ")
-	if focused {
-		str = lipgloss.NewStyle().
-			Background(c.Primary).
-			Foreground(c.Background).
-			Render(str)
-	}
-	return str
-}
-
-func renderError(err error) string {
-	if err == nil {
-		return ""
-	}
-	c := theme.Current().Colors
-	return lipgloss.NewStyle().
-		Foreground(c.Error).
-		Render("  Error: "+err.Error()) + "\n"
-}
-
-func renderHint(text string) string {
-	return lipgloss.NewStyle().
-		Foreground(theme.Current().Colors.Muted).
-		Render("  " + text)
-}
-
-func renderTitle(text string) string {
-	return lipgloss.NewStyle().
-		Foreground(theme.Current().Colors.Primary).
-		Bold(true).
-		Render(text)
-}
-
-func renderCenteredBox(title, content string, width, height int) string {
-	c := theme.Current().Colors
-	box := lipgloss.NewStyle().
-		Background(c.Background).
+	t.Focused.Base = t.Focused.Base.BorderForeground(c.Primary)
+	t.Focused.Title = lipgloss.NewStyle().Foreground(c.Primary).Bold(true)
+	t.Focused.Description = lipgloss.NewStyle().Foreground(c.Muted)
+	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(c.Accent).Bold(true)
+	t.Focused.SelectedOption = lipgloss.NewStyle().Foreground(c.Accent).Bold(true)
+	t.Focused.UnselectedOption = lipgloss.NewStyle().Foreground(c.Foreground)
+	t.Focused.FocusedButton = lipgloss.NewStyle().
+		Background(c.Primary).
+		Foreground(c.Background).
+		Padding(0, 2)
+	t.Focused.BlurredButton = lipgloss.NewStyle().
 		Foreground(c.Foreground).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Border).
-		Padding(1, 2).
-		Render(title + "\n" + content)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+		Padding(0, 2)
+	t.Focused.TextInput.Prompt = lipgloss.NewStyle().Foreground(c.Accent)
+	t.Focused.TextInput.Placeholder = lipgloss.NewStyle().Foreground(c.Muted)
+	t.Focused.ErrorIndicator = lipgloss.NewStyle().Foreground(c.Error)
+	t.Focused.ErrorMessage = lipgloss.NewStyle().Foreground(c.Error)
+
+	t.Blurred.Title = lipgloss.NewStyle().Foreground(c.Muted)
+	t.Blurred.Description = lipgloss.NewStyle().Foreground(c.Muted)
+
+	t.Help.FullKey = lipgloss.NewStyle().Foreground(c.Muted)
+	t.Help.FullDesc = lipgloss.NewStyle().Foreground(c.Muted)
+	t.Help.ShortKey = lipgloss.NewStyle().Foreground(c.Muted)
+	t.Help.ShortDesc = lipgloss.NewStyle().Foreground(c.Muted)
+
+	return t
 }
+
+func formTheme() huh.Theme { return nagareFormTheme{} }

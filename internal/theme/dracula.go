@@ -1,21 +1,20 @@
 package theme
 
-import "github.com/charmbracelet/lipgloss"
-
 func init() {
 	Register("dracula", &Theme{
 		Name: "dracula",
 		Colors: Colors{
-			Background: lipgloss.AdaptiveColor{Dark: "#282a36", Light: "#f8f8f2"},
-			Foreground: lipgloss.AdaptiveColor{Dark: "#f8f8f2", Light: "#282a36"},
-			Primary:    lipgloss.AdaptiveColor{Dark: "#bd93f9", Light: "#7e57c2"},
-			Secondary:  lipgloss.AdaptiveColor{Dark: "#ff79c6", Light: "#d81b60"},
-			Accent:     lipgloss.AdaptiveColor{Dark: "#8be9fd", Light: "#0097a7"},
-			Muted:      lipgloss.AdaptiveColor{Dark: "#6272a4", Light: "#9e9e9e"},
-			Border:     lipgloss.AdaptiveColor{Dark: "#44475a", Light: "#bdbdbd"},
-			Error:      lipgloss.AdaptiveColor{Dark: "#ff5555", Light: "#e53935"},
-			Warning:    lipgloss.AdaptiveColor{Dark: "#f1fa8c", Light: "#f9a825"},
-			Success:    lipgloss.AdaptiveColor{Dark: "#50fa7b", Light: "#43a047"},
+			Background: adapt("#282a36", "#f8f8f2"),
+			Foreground: adapt("#f8f8f2", "#282a36"),
+			Primary:    adapt("#bd93f9", "#7e57c2"),
+			Secondary:  adapt("#ff79c6", "#d81b60"),
+			Accent:     adapt("#8be9fd", "#0097a7"),
+			Muted:      adapt("#6272a4", "#9e9e9e"),
+			Border:     adapt("#44475a", "#bdbdbd"),
+			SelBg:      adapt("#44475a", "#bdbdbd"),
+			Error:      adapt("#ff5555", "#e53935"),
+			Warning:    adapt("#f1fa8c", "#f9a825"),
+			Success:    adapt("#50fa7b", "#43a047"),
 		},
 	})
 }

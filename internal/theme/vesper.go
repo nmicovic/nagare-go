@@ -1,21 +1,20 @@
 package theme
 
-import "github.com/charmbracelet/lipgloss"
-
 func init() {
 	Register("vesper", &Theme{
 		Name: "vesper",
 		Colors: Colors{
-			Background: lipgloss.AdaptiveColor{Dark: "#101010", Light: "#F0F0F0"},
-			Foreground: lipgloss.AdaptiveColor{Dark: "#FFF", Light: "#101010"},
-			Primary:    lipgloss.AdaptiveColor{Dark: "#FFC799", Light: "#FFC799"},
-			Secondary:  lipgloss.AdaptiveColor{Dark: "#FFC799", Light: "#FFC799"},
-			Accent:     lipgloss.AdaptiveColor{Dark: "#FF8080", Light: "#B30000"},
-			Muted:      lipgloss.AdaptiveColor{Dark: "#8b8b8b", Light: "#7a7a7a"},
-			Border:     lipgloss.AdaptiveColor{Dark: "#8b8b8b", Light: "#7a7a7a"},
-			Error:      lipgloss.AdaptiveColor{Dark: "#FF8080", Light: "#FF8080"},
-			Warning:    lipgloss.AdaptiveColor{Dark: "#FFC799", Light: "#FFC799"},
-			Success:    lipgloss.AdaptiveColor{Dark: "#99FFE4", Light: "#99FFE4"},
+			Background: adapt("#101010", "#F0F0F0"),
+			Foreground: adapt("#FFF", "#101010"),
+			Primary:    adapt("#FFC799", "#FFC799"),
+			Secondary:  adapt("#FFC799", "#FFC799"),
+			Accent:     adapt("#FF8080", "#B30000"),
+			Muted:      adapt("#8b8b8b", "#7a7a7a"),
+			Border:     adapt("#8b8b8b", "#7a7a7a"),
+			SelBg:      adapt("#8b8b8b", "#7a7a7a"),
+			Error:      adapt("#FF8080", "#FF8080"),
+			Warning:    adapt("#FFC799", "#FFC799"),
+			Success:    adapt("#99FFE4", "#99FFE4"),
 		},
 	})
 }

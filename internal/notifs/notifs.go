@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/notifications"
 	"github.com/nemke/nagare-go/internal/session"
@@ -231,7 +231,20 @@ func (m Model) saveConfig() {
 	}
 }
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
+	content := m.view()
+	// lipgloss Height only pads up to its target, never truncates, so a long
+	// notification list can render past the last row — which scrolls the alt
+	// screen and smears the UI. Clamp the assembled frame.
+	if m.width > 0 && m.height > 0 {
+		content = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content)
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
+}
+
+func (m Model) view() string {
 	if m.width == 0 {
 		return "Loading..."
 	}

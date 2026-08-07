@@ -2,11 +2,12 @@ package popup
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/theme"
@@ -109,7 +110,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
+	content := m.view()
+	// lipgloss Height only pads up to its target, never truncates. The popup
+	// renders inline (no alt screen), so overflow scrolls the host pane.
+	if m.width > 0 && m.height > 0 {
+		content = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content)
+	}
+	return tea.NewView(content)
+}
+
+func (m Model) view() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
@@ -160,7 +171,7 @@ func (m Model) renderHeader(width int) string {
 	c := theme.Current().Colors
 
 	var statusText string
-	var statusColor lipgloss.AdaptiveColor
+	var statusColor color.Color
 	if m.eventType == "needs_input" {
 		statusText = "● NEEDS INPUT"
 		statusColor = c.Error

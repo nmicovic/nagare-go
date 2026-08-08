@@ -125,3 +125,17 @@ func TestComputeDisplayNamesMixedAgents(t *testing.T) {
 		t.Errorf("pane %%2 = %q", got["%2"])
 	}
 }
+
+// pi is detectable as pane_current_command (standalone binary install).
+func TestParseAllPanesDetectsPi(t *testing.T) {
+	raw := "proj:0:0:pi:12345:zsh:%1\n"
+	panes := ParseAllPanes(raw)
+
+	p, ok := panes["proj"]
+	if !ok || len(p) != 1 {
+		t.Fatalf("expected 1 pi pane, got %v", panes)
+	}
+	if p[0].AgentType != models.AgentPi {
+		t.Errorf("agent = %q, want %q", p[0].AgentType, models.AgentPi)
+	}
+}

@@ -92,6 +92,14 @@ func installCommands(home string) {
 				return fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, prompt)
 			},
 		},
+		{
+			label: "pi",
+			dir:   filepath.Join(home, ".pi", "agent", "prompts"),
+			ext:   ".md",
+			format: func(_, description, prompt string) string {
+				return piPromptTemplate(description, prompt)
+			},
+		},
 	}
 	for _, t := range targets {
 		if err := writeCommandFiles(t); err != nil {

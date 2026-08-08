@@ -15,7 +15,8 @@ import (
 	"github.com/nemke/nagare-go/internal/tmux"
 )
 
-// HookEvent is the JSON structure received from Claude Code hooks via stdin.
+// HookEvent is the JSON structure received on stdin from an agent hook,
+// plugin, or extension. Fields absent for a given agent stay empty.
 type HookEvent struct {
 	HookEventName        string `json:"hook_event_name"`
 	SessionID            string `json:"session_id"`
@@ -29,12 +30,18 @@ var needsInputTypes = map[string]bool{
 	"elicitation_dialog": true,
 }
 
-// EventToState maps a hook event name to a state string.
+// EventToState maps a hook event name to a state string. Event names come from
+// every supported agent: Claude Code (MixedCase), Gemini CLI (MixedCase),
+// pi extensions (snake_case), and OpenCode plugins (dotted.lowercase).
 func EventToState(event, notificationType string) string {
 	switch event {
-	case "UserPromptSubmit", "PreToolUse", "BeforeAgent", "BeforeTool", "AfterTool":
+	// Claude Code
+	case "UserPromptSubmit", "PreToolUse", "PostToolUse",
+		"PreCompact", "PostCompact", "ElicitationResult":
 		return "working"
-	case "Stop", "AfterAgent":
+	case "PermissionRequest", "Elicitation":
+		return "waiting_input"
+	case "Stop", "StopFailure":
 		return "idle"
 	case "Notification":
 		if needsInputTypes[notificationType] {
@@ -45,6 +52,31 @@ func EventToState(event, notificationType string) string {
 		return "dead"
 	case "SessionStart":
 		return "idle"
+
+	// Gemini CLI
+	case "BeforeAgent", "BeforeTool", "AfterTool":
+		return "working"
+	case "AfterAgent":
+		return "idle"
+
+	// pi extension. pi has no permission prompts, so no waiting_input.
+	case "before_agent_start", "agent_start", "turn_start":
+		return "working"
+	case "agent_settled":
+		return "idle"
+	case "session_start":
+		return "idle"
+	case "session_shutdown":
+		return "dead"
+
+	// OpenCode plugin
+	case "session.status", "tool.execute.before", "permission.replied":
+		return "working"
+	case "permission.asked":
+		return "waiting_input"
+	case "session.idle", "session.error", "session.created":
+		return "idle"
+
 	default:
 		return "unknown"
 	}
@@ -54,7 +86,12 @@ func EventToState(event, notificationType string) string {
 // Returns (eventType, workingSeconds). eventType is "" if no notification.
 // minWorkingSeconds is the threshold from config (typically 30).
 func ShouldNotify(newState, prevState string, workingSeconds, minWorkingSeconds int) (string, int) {
+	// Only on the transition into waiting_input: a single approval prompt fires
+	// both PermissionRequest and Notification/permission_prompt.
 	if newState == "waiting_input" {
+		if prevState == "waiting_input" {
+			return "", 0
+		}
 		return "needs_input", 0
 	}
 

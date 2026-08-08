@@ -19,19 +19,20 @@ go vet ./...               # lint
 ```bash
 nagare-go                  # launch picker (default)
 nagare-go pick             # launch picker
-nagare-go hook-state       # handle Claude Code hook events (stdin JSON)
-nagare-go setup            # install hooks + MCP server
+nagare-go hook-state       # handle agent hook/plugin/extension events (stdin JSON)
+nagare-go setup            # install status reporting + MCP server + slash commands
 nagare-go notifs           # notification center TUI
 nagare-go popup-notif      # popup notification (called by hooks)
 nagare-go new [path]       # create new agent session
 nagare-go mcp              # run MCP server (stdio, for agent CLIs)
+nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
 ```
 
 ## Architecture
 
 Single binary with cobra subcommands. All code in `internal/` packages.
 
-- `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush)
+- `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
 - `internal/tmux` — scanner (list-panes + /proc descendant walk), status detection (pane scraping)
 - `internal/state` — state files + session registry
@@ -43,11 +44,35 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/session` — session creation + path resolution
 - `internal/newsession` — new session + quick prototype forms
 - `internal/theme` — 6 themes with AdaptiveColor, self-registering via init()
-- `internal/setup` — hook + MCP + slash command installation (Claude Code, Gemini CLI, OpenCode)
-- `internal/mcp` — MCP server for inter-agent messaging
+- `internal/setup` — status reporting + MCP + slash command installation for every agent
+- `internal/mcp` — MCP server for inter-agent messaging, plus the CLI tool bridge
 - `internal/bin` — shared binary finder
 - `internal/fsutil` — atomic file writes
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
+
+## Agent Integrations
+
+Every agent reports status through one interface: `nagare-go hook-state` reading a JSON
+object on stdin with `hook_event_name`, `session_id`, `cwd`, and optionally
+`last_assistant_message` / `notification_type`, plus `TMUX_PANE` from the environment.
+Agent-native event names are mapped to states centrally in `hooks.EventToState` — never
+per-agent elsewhere.
+
+| Agent | Status reporting | Messaging tools |
+|-------|------------------|-----------------|
+| Claude Code | hooks in `~/.claude/settings.json` | MCP (`~/.claude.json`) |
+| Gemini CLI | hooks in `~/.gemini/settings.json` | MCP (`~/.gemini/settings.json`) |
+| OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
+| Crush | none | MCP (`~/.config/crush/crush.json`) |
+| pi | extension `~/.pi/agent/extensions/nagare.ts` | `nagare-go tool` bridge (pi has no MCP) |
+
+pi has no MCP client by design, so its extension registers the five nagare tools and
+shells out to `nagare-go tool <name> <json>`, which calls the same handlers the MCP
+server calls. pi also has no permission prompts, so pi sessions never reach
+`waiting_input`.
+
+Generated plugin/extension files are rewritten on every `nagare-go setup`, so edits
+belong in `internal/setup`, not in the installed files.
 
 ## Picker Keybindings
 

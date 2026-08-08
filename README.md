@@ -1,5 +1,5 @@
 <h1 align="center">nagare-go 流れ</h1>
-<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, OpenCode, Gemini CLI, and Crush sessions from a single interface.</p>
+<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, OpenCode, Gemini CLI, Crush, and pi sessions from a single interface.</p>
 
 <p align="center">
   <img src="images/nagare-logo-glowing.jpg" alt="nagare-go" width="550">
@@ -10,11 +10,11 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 ## Features
 
 - **Session Picker** — fuzzy search, list/grid views, live tmux preview
-- **Real-time Status** — hooks detect agent state (idle/working/waiting/dead)
+- **Real-time Status** — hooks, plugins, and extensions detect agent state (idle/working/waiting/dead)
 - **Notifications** — toast, bell, OS notifications, popup when agents need attention
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)
-- **Inter-Agent Messaging** — MCP server lets agents discover, message, and coordinate with each other
+- **Inter-Agent Messaging** — MCP server lets agents discover, message, and coordinate with each other (pi has no MCP client, so it gets the same tools through a CLI bridge)
 - **6 Themes** — tokyonight, catppuccin, dracula, gruvbox, monokai, nord
 - **3ms Startup** — compiled Go binary, no runtime dependencies
 
@@ -34,9 +34,21 @@ cd nagare-go
 ```
 
 This does three things:
-1. **Installs hooks** into `~/.claude/settings.json` — Claude Code will notify nagare on every event (prompt, stop, permission, session start/end)
-2. **Registers MCP server** in `~/.claude.json`, `~/.gemini/settings.json`, and `~/.config/opencode/config.json` — enables inter-agent messaging across all supported agent CLIs
-3. **Installs slash commands** (`/nagare-ls`, `/nagare-send`, `/nagare-send-wait`, `/nagare-inbox`) for Claude Code, Gemini CLI, and OpenCode
+
+1. **Installs status reporting** so each agent notifies nagare on every event (prompt, stop, permission, session start/end). Each agent gets whatever mechanism it supports:
+
+   | Agent | Mechanism |
+   |-------|-----------|
+   | Claude Code | hooks in `~/.claude/settings.json` |
+   | Gemini CLI | hooks in `~/.gemini/settings.json` |
+   | OpenCode | plugin at `~/.config/opencode/plugins/nagare.js` |
+   | pi | extension at `~/.pi/agent/extensions/nagare.ts` |
+
+2. **Registers the MCP server** in `~/.claude.json`, `~/.gemini/settings.json`, `~/.config/opencode/opencode.json`, and `~/.config/crush/crush.json` — enabling inter-agent messaging. pi has no MCP client by design, so its extension registers the same five tools and routes them through `nagare-go tool`.
+
+3. **Installs slash commands** (`/nagare-ls`, `/nagare-send`, `/nagare-send-wait`, `/nagare-inbox`) for Claude Code, Gemini CLI, OpenCode, and pi — and an equivalent Agent Skill for Crush.
+
+Re-running `setup` is safe: it rewrites the generated plugin and extension files in place and refreshes every registration.
 
 Then add a tmux keybinding to open the picker:
 
@@ -51,10 +63,10 @@ Reload tmux config: `tmux source-file ~/.tmux.conf`
 
 ```bash
 nagare-go              # open session picker (default)
-nagare-go new ~/proj   # create new session with Claude
+nagare-go new ~/proj   # create new session with Claude (-a opencode|gemini|pi)
 nagare-go new myproto  # quick prototype (creates in ~/Prototypes/)
 nagare-go notifs       # notification center + settings
-nagare-go setup        # install hooks + MCP server
+nagare-go setup        # install status reporting + MCP server + slash commands
 nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 ```
 

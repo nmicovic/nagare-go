@@ -115,9 +115,22 @@ func LoadStatesByPaneID(dir string) map[string]models.SessionState {
 	return states
 }
 
+// StateFileName returns a filesystem-safe file name for a session ID. Session
+// identifiers are opaque strings chosen by each agent — pi's, for example, is a
+// path to a JSONL file — so separators and leading dots are neutralized to keep
+// every state file a single flat entry inside the states directory.
+func StateFileName(sessionID string) string {
+	safe := strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(sessionID)
+	safe = strings.TrimLeft(safe, ".")
+	if safe == "" {
+		safe = "unknown"
+	}
+	return safe + ".json"
+}
+
 // LoadStateByID loads a single state file by session ID. Returns zero value and false if not found.
 func LoadStateByID(dir, sessionID string) (models.SessionState, bool) {
-	path := filepath.Join(dir, sessionID+".json")
+	path := filepath.Join(dir, StateFileName(sessionID))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return models.SessionState{}, false
@@ -140,6 +153,6 @@ func WriteState(dir string, s models.SessionState) error {
 		return err
 	}
 
-	path := filepath.Join(dir, s.SessionID+".json")
+	path := filepath.Join(dir, StateFileName(s.SessionID))
 	return fsutil.AtomicWrite(path, data, 0644)
 }

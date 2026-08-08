@@ -152,6 +152,11 @@ func agentCommand(agent, projectPath string, continueSession bool) string {
 		return "opencode"
 	case "gemini":
 		return "gemini"
+	case "pi":
+		if continueSession {
+			return "pi -c"
+		}
+		return "pi"
 	default: // claude
 		if continueSession && claudeSessionExists(projectPath) {
 			return "claude -c"

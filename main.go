@@ -73,7 +73,7 @@ func main() {
 
 	hookStateCmd := &cobra.Command{
 		Use:   "hook-state",
-		Short: "Handle Claude Code hook events from stdin",
+		Short: "Handle agent hook events from stdin",
 		Run: func(cmd *cobra.Command, args []string) {
 			hooks.Handle()
 		},
@@ -81,7 +81,7 @@ func main() {
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Install hooks to ~/.claude/settings.json",
+		Short: "Install hooks, plugins, MCP server and slash commands for all agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return setup.Run()
 		},
@@ -112,7 +112,7 @@ func main() {
 			return nil
 		},
 	}
-	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, opencode, gemini)")
+	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, opencode, gemini, pi)")
 	newCmd.Flags().StringP("name", "n", "", "Session name (default: path basename)")
 	newCmd.Flags().BoolP("continue", "c", true, "Continue previous session")
 
@@ -154,7 +154,29 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd)
+	// Bridge for agents without an MCP client (pi). Called by the nagare pi
+	// extension, not by users.
+	toolCmd := &cobra.Command{
+		Use:          "tool <name> [json]",
+		Short:        "Invoke a nagare messaging tool directly (for agents without MCP)",
+		Args:         cobra.RangeArgs(1, 2),
+		Hidden:       true,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var toolArgs []byte
+			if len(args) == 2 {
+				toolArgs = []byte(args[1])
+			}
+			out, err := mcp.RunTool(cmd.Context(), args[0], toolArgs)
+			if err != nil {
+				return err
+			}
+			cmd.Println(out)
+			return nil
+		},
+	}
+
+	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

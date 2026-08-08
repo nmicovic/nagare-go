@@ -56,3 +56,23 @@ func TestStatusColor(t *testing.T) {
 		t.Errorf("StatusColor(Idle) = %q, want %q", got, "#00D26A")
 	}
 }
+
+// Every agent type needs a label, a foreground color, and a background color;
+// a missing case silently renders as "Unknown" in the picker.
+func TestAgentPresentationComplete(t *testing.T) {
+	agents := []AgentType{AgentClaude, AgentOpenCode, AgentGemini, AgentCrush, AgentPi}
+	for _, a := range agents {
+		if label := AgentLabel(a); label == "Unknown" {
+			t.Errorf("AgentLabel(%q) has no label", a)
+		}
+		if c := AgentColor(a); c == "#565f89" {
+			t.Errorf("AgentColor(%q) falls back to the unknown color", a)
+		}
+		if c := AgentBgColor(a); c == "" {
+			t.Errorf("AgentBgColor(%q) is empty", a)
+		}
+	}
+	if got := AgentLabel(AgentPi); got != "Pi" {
+		t.Errorf("AgentLabel(Pi) = %q, want %q", got, "Pi")
+	}
+}

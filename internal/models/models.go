@@ -28,6 +28,8 @@ const (
 	AgentGemini AgentType = "gemini"
 	// AgentCrush represents the Crush agent.
 	AgentCrush AgentType = "crush"
+	// AgentPi represents the pi coding agent.
+	AgentPi AgentType = "pi"
 	// AgentUnknown represents an unrecognized agent.
 	AgentUnknown AgentType = "unknown"
 )
@@ -115,6 +117,8 @@ func AgentLabel(a AgentType) string {
 		return "Gemini"
 	case AgentCrush:
 		return "Crush"
+	case AgentPi:
+		return "Pi"
 	default:
 		return "Unknown"
 	}
@@ -131,6 +135,8 @@ func AgentColor(a AgentType) string {
 		return "#4285f4"
 	case AgentCrush:
 		return "#ff5fd7"
+	case AgentPi:
+		return "#a78bfa"
 	default:
 		return "#565f89"
 	}
@@ -147,6 +153,8 @@ func AgentBgColor(a AgentType) string {
 		return "#1a2744"
 	case AgentCrush:
 		return "#3b1a33"
+	case AgentPi:
+		return "#241b3b"
 	default:
 		return ""
 	}

@@ -209,3 +209,33 @@ func TestWriteState(t *testing.T) {
 		t.Errorf("state = %q, want %q", loaded.State, "idle")
 	}
 }
+
+func TestStateFileName(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"abc-123", "abc-123.json"},
+		{"/home/u/.pi/agent/sessions/abc.jsonl", "-home-u-.pi-agent-sessions-abc.jsonl.json"},
+		{"../../escape", "-..-escape.json"},
+		{"", "unknown.json"},
+	}
+	for _, tt := range tests {
+		if got := StateFileName(tt.in); got != tt.want {
+			t.Errorf("StateFileName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// A session id containing separators must still round-trip through write/load.
+func TestWriteAndLoadStateWithPathLikeID(t *testing.T) {
+	dir := t.TempDir()
+	id := "/home/u/.pi/agent/sessions/abc.jsonl"
+	if err := WriteState(dir, models.SessionState{SessionID: id, State: "working"}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := LoadStateByID(dir, id)
+	if !ok {
+		t.Fatal("state not found by path-like id")
+	}
+	if got.State != "working" {
+		t.Errorf("state = %q, want %q", got.State, "working")
+	}
+}

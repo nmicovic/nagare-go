@@ -10,10 +10,17 @@ import (
 	"github.com/nemke/nagare-go/internal/bin"
 )
 
+// Claude Code hook events nagare subscribes to, with matcher="" (all).
+// PostToolUse is deliberately absent: it would double the process spawns per
+// turn without changing the state PreToolUse already reported.
 var hookEvents = []string{
 	"UserPromptSubmit",
-	"Stop",
 	"PreToolUse",
+	"PermissionRequest", // exact "needs approval" signal
+	"Elicitation",       // MCP server asking the user for input
+	"ElicitationResult", // input supplied, turn resumes
+	"Stop",
+	"StopFailure", // turn died on an API error — otherwise stuck "working"
 	"SessionStart",
 	"SessionEnd",
 }
@@ -21,7 +28,8 @@ var hookEvents = []string{
 // notificationEvent has a matcher, handled separately.
 const notificationMatcher = "idle_prompt|permission_prompt|elicitation_dialog"
 
-// Run installs nagare-go hooks into Claude Code settings.
+// Run installs nagare-go status reporting, the MCP server, and slash commands
+// into every supported agent CLI.
 func Run() error {
 	// Ensure data directory exists
 	home, err := os.UserHomeDir()
@@ -52,6 +60,15 @@ func Run() error {
 		fmt.Printf("  Hooks: Gemini CLI — skipped (%v)\n", err)
 	}
 
+	// OpenCode and pi have no settings-file hook mechanism; they report status
+	// from a plugin and an extension instead.
+	if err := installOpenCodePlugin(home, nagareBin); err != nil {
+		fmt.Printf("  Plugin: OpenCode — skipped (%v)\n", err)
+	}
+	if err := installPiExtension(home, nagareBin); err != nil {
+		fmt.Printf("  Extension: pi — skipped (%v)\n", err)
+	}
+
 	// Register MCP server in all supported agents
 
 	// Claude Code + Gemini CLI use standard mcpServers format
@@ -66,9 +83,11 @@ func Run() error {
 		}
 	}
 
-	// OpenCode and Crush use "mcp" key with type/command format
+	// OpenCode and Crush use "mcp" key with type/command format.
+	// OpenCode's global config is opencode.json — config.json was the old name
+	// and current versions ignore it.
 	for _, mc := range []struct{ name, path string }{
-		{"OpenCode", filepath.Join(home, ".config", "opencode", "config.json")},
+		{"OpenCode", filepath.Join(home, ".config", "opencode", "opencode.json")},
 		{"Crush", filepath.Join(home, ".config", "crush", "crush.json")},
 	} {
 		if err := registerMCPLocal(mc.path, nagareBin); err != nil {

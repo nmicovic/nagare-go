@@ -73,7 +73,7 @@ func New() Model {
 
 			huh.NewSelect[string]().
 				Title("Agent").
-				Options(huh.NewOptions("claude", "opencode", "gemini")...).
+				Options(huh.NewOptions("claude", "opencode", "gemini", "pi")...).
 				Value(&s.agent),
 
 			huh.NewConfirm().

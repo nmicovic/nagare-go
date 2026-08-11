@@ -147,6 +147,19 @@ how the rest of `internal/session` is covered.
 - Converting an existing plain session into a worktree
 - Listing or pruning worktrees that have no agent pane
 
+## Status
+
+All three phases implemented on `worktree-launch`. Deviations from the plan above:
+
+- The detail pane's worktree row is a `Repo` row (`app (worktree the-site)`) rather than
+  a `Worktree` row, because the existing labels are padded to a six-column grid that
+  "Worktree" breaks. It also names the parent repo, which the display name does not.
+- `workFor` caches on a value receiver. The cache map is created in `New()` and replaced
+  (never nilled) per scan, so entries written during render persist into the real model.
+  A pointer receiver would have mutated a copy and re-run git every frame.
+- Worktree removal is confirmed with a `y/N` prompt in the search line; anything other
+  than an explicit yes declines.
+
 ## Landing
 
 Two PRs: Phase 1 alone, then Phases 2 and 3. Phase 1 is independently useful, and

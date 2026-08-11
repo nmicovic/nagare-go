@@ -25,6 +25,7 @@ type PaneInfo struct {
 	AgentType   models.AgentType
 	WindowName  string
 	PaneID      string
+	Path        string // pane_current_path — the pane's own cwd, which may be a worktree
 }
 
 var agentProcesses = map[string]models.AgentType{
@@ -56,9 +57,9 @@ func ParseSessions(raw string) []RawSession {
 }
 
 // ParseAllPanes parses tmux list-panes -a output.
-// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}"
+// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}:#{pane_current_path}"
 // Returns agent panes grouped by session name.
-// Accepts 5-, 6-, or 7-field input for backward compatibility.
+// Accepts 5- through 8-field input for backward compatibility.
 func ParseAllPanes(raw string) map[string][]PaneInfo {
 	result := make(map[string][]PaneInfo)
 	for _, line := range strings.Split(raw, "\n") {
@@ -66,7 +67,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 7)
+		parts := strings.SplitN(line, ":", 8)
 		if len(parts) < 5 {
 			continue
 		}
@@ -83,6 +84,10 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		if len(parts) >= 7 {
 			paneID = strings.TrimSpace(parts[6])
 		}
+		panePath := ""
+		if len(parts) >= 8 {
+			panePath = strings.TrimSpace(parts[7])
+		}
 
 		agentType, ok := agentProcesses[cmd]
 		if !ok {
@@ -98,6 +103,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 			AgentType:   agentType,
 			WindowName:  windowName,
 			PaneID:      paneID,
+			Path:        panePath,
 		})
 	}
 	return result
@@ -225,7 +231,7 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 	rawSessions := RunTmux("list-sessions", "-F", "#{session_name}:#{session_id}:#{session_path}")
 	sessions := ParseSessions(rawSessions)
 
-	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}")
+	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}:#{pane_current_path}")
 	allPanes := ParseAllPanes(rawPanes)
 
 	var result []models.Session

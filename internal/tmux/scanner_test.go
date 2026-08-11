@@ -139,3 +139,28 @@ func TestParseAllPanesDetectsPi(t *testing.T) {
 		t.Errorf("agent = %q, want %q", p[0].AgentType, models.AgentPi)
 	}
 }
+
+func TestParseAllPanesCapturesPanePath(t *testing.T) {
+	raw := "proj:0:0:claude:111:? claude:%2:/home/u/proj/.claude/worktrees/the-site\n"
+	panes := ParseAllPanes(raw)
+
+	p, ok := panes["proj"]
+	if !ok || len(p) != 1 {
+		t.Fatalf("expected 1 pane, got %v", panes)
+	}
+	if p[0].Path != "/home/u/proj/.claude/worktrees/the-site" {
+		t.Errorf("Path = %q, want the worktree path", p[0].Path)
+	}
+}
+
+// Older field counts must keep parsing, as they already do for pane_id.
+func TestParseAllPanesWithoutPanePath(t *testing.T) {
+	raw := "proj:0:0:claude:111:? claude:%2\n"
+	panes := ParseAllPanes(raw)
+	if len(panes["proj"]) != 1 {
+		t.Fatalf("expected 1 pane, got %v", panes)
+	}
+	if got := panes["proj"][0].Path; got != "" {
+		t.Errorf("Path = %q, want empty", got)
+	}
+}

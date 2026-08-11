@@ -25,6 +25,22 @@ Claude Code already ships the flag:
 `worktree-the-site` — confirmed against the live worktrees. None of opencode, gemini,
 crush, or pi has an equivalent.
 
+`claude -w` has a precondition found during implementation: it **refuses** on a
+directory whose trust dialog has not been accepted —
+
+```
+Error creating worktree: Workspace trust not yet accepted. Run `claude` once in this
+directory and accept the trust dialog, then retry with --worktree.
+```
+
+— rather than prompting. Delegating blindly would leave nagare holding a window, a
+registry entry, and no worktree. Trust is readable from Claude's own config at
+`~/.claude.json` under `projects[dir].hasTrustDialogAccepted`, so nagare delegates only
+when it can prove the flag will work and creates the worktree itself otherwise. Plain
+`claude` in a nagare-made worktree still shows its trust dialog, which the user can
+accept — so the fallback degrades gracefully where the flag hard-fails. Any failure to
+read that config counts as untrusted, since the fallback works everywhere.
+
 `--tmux` is deliberately never passed: nagare creates the pane itself, and letting
 Claude create a second tmux session would fight it.
 

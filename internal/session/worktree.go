@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,16 +21,46 @@ type worktreeLaunch struct {
 	PreCreate bool   // nagare must create the worktree before opening the window
 }
 
+// claudeTrustsDir reports whether Claude Code has an accepted trust dialog for
+// dir. It matters because `claude -w` refuses outright on an untrusted
+// directory ("Workspace trust not yet accepted") instead of prompting, which
+// would leave nagare with a window and no worktree.
+//
+// This reads Claude's own config, so treat every failure as untrusted: the
+// fallback path works everywhere, making that the safe direction to fail in.
+func claudeTrustsDir(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		Projects map[string]struct {
+			HasTrustDialogAccepted bool `json:"hasTrustDialogAccepted"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	return cfg.Projects[dir].HasTrustDialogAccepted
+}
+
 // planWorktreeLaunch decides how a given agent gets into a new worktree.
 //
-// Claude Code has "-w <name>", so it is handed the flag and creates the
-// worktree itself under .claude/worktrees. No other agent has an equivalent, so
-// nagare creates the worktree under .worktrees and opens the window inside it.
+// Claude Code has "-w <name>", so a trusted repo is handed the flag and Claude
+// creates the worktree itself under .claude/worktrees. Every other agent — and
+// Claude in a directory it does not yet trust, where the flag hard-fails — gets
+// a worktree created by nagare under .worktrees, with the pane opened inside it.
+// Plain `claude` there still shows its trust dialog, which the user can accept;
+// that degrades gracefully where `-w` simply refuses.
 //
 // --tmux is never passed: nagare has already made the window, and letting
 // Claude create a second tmux session would fight it.
-func planWorktreeLaunch(agent, mainRoot, name string) worktreeLaunch {
-	if agent == "claude" {
+func planWorktreeLaunch(agent, mainRoot, name string, claudeTrusted bool) worktreeLaunch {
+	if agent == "claude" && claudeTrusted {
 		return worktreeLaunch{
 			Cmd:  "claude -w " + name,
 			Cwd:  mainRoot,
@@ -89,7 +120,7 @@ func CreateWorktree(repoPath, worktreeName, agent string) (string, error) {
 		return "", fmt.Errorf("%s is not a git repository — worktrees need one", repoPath)
 	}
 
-	plan := planWorktreeLaunch(agent, mainRoot, worktreeName)
+	plan := planWorktreeLaunch(agent, mainRoot, worktreeName, claudeTrustsDir(mainRoot))
 	if plan.PreCreate {
 		if _, err := git.AddWorktree(mainRoot, worktreeName); err != nil {
 			return "", err

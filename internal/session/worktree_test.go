@@ -8,7 +8,7 @@ import (
 
 func TestPlanWorktreeLaunchClaude(t *testing.T) {
 	root := "/home/u/Projects/app"
-	got := planWorktreeLaunch("claude", root, "the-site")
+	got := planWorktreeLaunch("claude", root, "the-site", true)
 
 	// Claude creates the worktree itself, so the window opens at the repo root
 	// and the command carries the flag.
@@ -30,7 +30,7 @@ func TestPlanWorktreeLaunchClaude(t *testing.T) {
 func TestPlanWorktreeLaunchOtherAgents(t *testing.T) {
 	root := "/home/u/Projects/app"
 	for _, agent := range []string{"opencode", "gemini", "crush", "pi"} {
-		got := planWorktreeLaunch(agent, root, "the-site")
+		got := planWorktreeLaunch(agent, root, "the-site", true)
 
 		want := filepath.Join(root, ".worktrees", "the-site")
 		if got.Path != want {
@@ -61,7 +61,7 @@ func TestPlanWorktreeLaunchOtherAgents(t *testing.T) {
 // nagare just made the window in.
 func TestPlanWorktreeLaunchNeverPassesTmux(t *testing.T) {
 	for _, agent := range []string{"claude", "opencode", "pi"} {
-		if got := planWorktreeLaunch(agent, "/r", "w"); strings.Contains(got.Cmd, "--tmux") {
+		if got := planWorktreeLaunch(agent, "/r", "w", true); strings.Contains(got.Cmd, "--tmux") {
 			t.Errorf("%s: Cmd = %q, must not pass --tmux", agent, got.Cmd)
 		}
 	}
@@ -74,5 +74,26 @@ func TestAgentCommandLaunchesTheRequestedAgent(t *testing.T) {
 		if got := agentCommand(agent, "/tmp", false); !strings.HasPrefix(got, agent) {
 			t.Errorf("agentCommand(%q) = %q, want it to launch %s", agent, got, agent)
 		}
+	}
+}
+
+// `claude -w` refuses on an untrusted directory rather than prompting, so an
+// untrusted repo must fall back to a nagare-created worktree and plain claude.
+func TestPlanWorktreeLaunchClaudeUntrusted(t *testing.T) {
+	root := "/home/u/Projects/app"
+	got := planWorktreeLaunch("claude", root, "the-site", false)
+
+	if strings.Contains(got.Cmd, "-w") {
+		t.Errorf("Cmd = %q, must not pass -w to an untrusted directory", got.Cmd)
+	}
+	if !got.PreCreate {
+		t.Error("PreCreate = false, but nagare must create the worktree itself")
+	}
+	want := filepath.Join(root, ".worktrees", "the-site")
+	if got.Path != want || got.Cwd != want {
+		t.Errorf("Path/Cwd = %q/%q, want %q", got.Path, got.Cwd, want)
+	}
+	if !strings.HasPrefix(got.Cmd, "claude") {
+		t.Errorf("Cmd = %q, want it to still launch claude", got.Cmd)
 	}
 }

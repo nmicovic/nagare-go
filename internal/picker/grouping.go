@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/nemke/nagare-go/internal/models"
@@ -81,4 +82,42 @@ func buildRows(sessions []models.Session) []listRow {
 		rows = append(rows, listRow{SessionIdx: i, Label: childLabel(s), Glyph: glyph})
 	}
 	return rows
+}
+
+// sharedPaths returns the working directories held by more than one agent, with
+// their counts. Two agents in one directory will overwrite each other's edits,
+// which is worth surfacing. Sessions without a path (saved ones) are ignored.
+func sharedPaths(sessions []models.Session) map[string]int {
+	counts := make(map[string]int, len(sessions))
+	for _, s := range sessions {
+		if s.Path != "" {
+			counts[s.Path]++
+		}
+	}
+	for path, n := range counts {
+		if n < 2 {
+			delete(counts, path)
+		}
+	}
+	return counts
+}
+
+// killTarget returns the tmux target to kill for s and whether it addresses a
+// window rather than a whole session.
+//
+// Worktree panes live as windows inside one session, so killing the session
+// would take a repo's other worktrees down too. A session holding more than one
+// agent pane is therefore killed a window at a time; a lone session is killed
+// whole, as it always was.
+func killTarget(s models.Session, sessions []models.Session) (string, bool) {
+	agents := 0
+	for _, other := range sessions {
+		if other.SessionName == s.SessionName {
+			agents++
+		}
+	}
+	if agents > 1 {
+		return fmt.Sprintf("%s:%d", s.SessionName, s.WindowIndex), true
+	}
+	return s.SessionName, false
 }

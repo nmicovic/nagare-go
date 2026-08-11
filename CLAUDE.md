@@ -74,6 +74,17 @@ what lets the picker group them. Sessions are matched to a repo through
 `git.MainRoot`, not by literal path, because a session's own directory is often a
 worktree.
 
+Because worktrees are windows in one session, Ctrl+x kills the *window* whenever a
+session holds more than one agent pane — killing the session would take a repo's other
+worktrees with it. On a worktree pane it then offers removal; `git.RemoveWorktree` never
+passes `--force`, so git refuses while there is uncommitted work, and the branch is left
+intact.
+
+The detail pane shows outstanding work (`git.WorkStatus`) and warns when two agents
+share one directory. Work is cached per path and refreshed per scan: the pane
+re-renders every frame for the status-dot pulse, so git must never be called from
+render.
+
 In the list view, sessions sharing a tmux session name are grouped under a single
 header row naming the repo, and children show only their own name — so the repo
 prefix is not repeated on every row. Grouping starts at two members; a lone session
@@ -119,7 +130,7 @@ belong in `internal/setup`, not in the installed files.
 | Ctrl+f | Toggle star |
 | Ctrl+o | Cycle sort mode |
 | Ctrl+w | Unload agent pane |
-| Ctrl+x | Kill tmux session |
+| Ctrl+x | Kill the pane's window (or the session if it is the only agent pane); offers to remove a worktree |
 | F2 | Rename session |
 | F3 | New git worktree for this repo |
 | Ctrl+n | New session form |

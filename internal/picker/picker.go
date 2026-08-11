@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/config"
+	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/session"
@@ -87,6 +88,9 @@ type Model struct {
 	renameSession models.Session
 	worktreeMode  bool
 	worktreeOn    models.Session
+	confirmMode   bool
+	confirmOn     models.Session
+	workCache     map[string]git.Work // outstanding work per path, refreshed each scan
 	result        Result
 	promptMode    bool
 	promptTarget  models.Session
@@ -119,6 +123,7 @@ func New() Model {
 		showHelpBar: cfg.Picker.ShowHelpBar,
 		registry:    state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput: pi,
+		workCache:   make(map[string]git.Work),
 	}
 }
 
@@ -202,6 +207,26 @@ func (m *Model) applyGridOrder(visible []models.Session) {
 	m.gridOrder = order
 }
 
+// workFor returns outstanding git work for a session, computed at most once per
+// scan per path. It is only consulted for worktree panes and only for the
+// selected session, because the detail pane re-renders every frame for the
+// status-dot pulse and git must not be called from there.
+// The receiver is a value, but workCache is a map created in New() and replaced
+// (never nilled) on each scan, so entries written here persist into the real
+// model rather than dying with a copy — which is what keeps git off the render
+// path after the first lookup.
+func (m Model) workFor(s models.Session) git.Work {
+	if s.Path == "" || m.workCache == nil {
+		return git.Work{}
+	}
+	if w, ok := m.workCache[s.Path]; ok {
+		return w
+	}
+	w := git.WorkStatus(s.Path)
+	m.workCache[s.Path] = w
+	return w
+}
+
 // isStarred returns whether a session is starred in the registry. A Model
 // without a registry has no stars rather than panicking, which keeps sorting
 // testable in isolation.
@@ -246,6 +271,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionsUpdatedMsg:
 		m.sessions = []models.Session(msg)
+		m.workCache = make(map[string]git.Work) // recompute work against the new scan
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
@@ -402,6 +428,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleWorktreeKey(msg)
 	}
 
+	// A pending confirmation swallows everything until answered
+	if m.confirmMode {
+		return m.handleConfirmKey(msg)
+	}
+
 	// Prompt mode intercepts keys
 	if m.promptMode {
 		return m.handlePromptKey(msg)
@@ -522,8 +553,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyKillSession:
 		if s, ok := m.selectedSession(); ok {
 			markDead(s, m.statesDir)
-			tmux.RunTmux("kill-session", "-t", s.SessionName)
-			log.Info("killed session %s", s.Name)
+			// Kill only this window when the session holds sibling agent panes,
+			// or a repo's other worktrees would go down with it.
+			if target, isWindow := killTarget(s, m.sessions); isWindow {
+				tmux.RunTmux("kill-window", "-t", target)
+				log.Info("killed window %s (%s)", target, s.Name)
+			} else {
+				tmux.RunTmux("kill-session", "-t", target)
+				log.Info("killed session %s", s.Name)
+			}
+			// A worktree outlives its pane, so offer to remove it too.
+			if s.Details.Worktree != "" {
+				m.confirmMode = true
+				m.confirmOn = s
+				return m, doScan(m.statesDir)
+			}
 			return m, doScan(m.statesDir)
 		}
 		return m, nil
@@ -608,6 +652,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// handleConfirmKey answers the pending worktree-removal confirmation. Anything
+// other than an explicit yes declines, since the action deletes a directory.
+func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.confirmMode = false
+	if key := msg.String(); key != "y" && key != "Y" {
+		log.Info("kept worktree %s", m.confirmOn.Details.Worktree)
+		return m, nil
+	}
+	// git refuses while the worktree holds uncommitted work, so a mistaken yes
+	// cannot destroy unsaved changes.
+	if err := git.RemoveWorktree(m.confirmOn.Path); err != nil {
+		log.Info("could not remove worktree %s: %v", m.confirmOn.Details.Worktree, err)
+		return m, nil
+	}
+	log.Info("removed worktree %s", m.confirmOn.Details.Worktree)
+	return m, doScan(m.statesDir)
 }
 
 // handleWorktreeKey handles key input while naming a new worktree. The name is
@@ -1118,6 +1180,8 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 		m.searchInput.Prompt = " Rename: "
 	} else if m.worktreeMode {
 		m.searchInput.Prompt = " New worktree: "
+	} else if m.confirmMode {
+		m.searchInput.Prompt = fmt.Sprintf(" Remove worktree %q? (y/N) ", m.confirmOn.Details.Worktree)
 	} else {
 		m.searchInput.Prompt = " > "
 	}
@@ -1364,6 +1428,22 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if s.Details.RepoName != "" && s.Details.Worktree != "" {
 		repo := fmt.Sprintf("%s (worktree %s)", s.Details.RepoName, s.Details.Worktree)
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Repo  "), val.Render(repo)))
+
+		w := m.workFor(s)
+		state := "clean"
+		if w.Dirty > 0 {
+			state = fmt.Sprintf("%d uncommitted", w.Dirty)
+		}
+		if w.HasUpstream && w.Ahead > 0 {
+			state += fmt.Sprintf(" · %d ahead", w.Ahead)
+		}
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Work  "), val.Render(state)))
+	}
+	// Two agents in one working tree will overwrite each other's edits.
+	if n := sharedPaths(m.sessions)[s.Path]; n > 1 {
+		warn := lipgloss.NewStyle().Foreground(theme.Current().Colors.Warning)
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Shared"),
+			warn.Render(fmt.Sprintf("%d agents in this directory", n))))
 	}
 	if s.Details.LastActivity != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))

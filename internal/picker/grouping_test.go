@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/models"
 )
 
@@ -293,5 +294,78 @@ func TestRenderListViewFitsWorktreeNames(t *testing.T) {
 		if w := lipgloss.Width(line); w > width {
 			t.Errorf("line is %d cells wide, want <= %d: %q", w, width, line)
 		}
+	}
+}
+
+// Two agents in one working tree will fight over files, so the picker has to
+// say so rather than letting it be discovered through conflicts.
+func TestSharedPaths(t *testing.T) {
+	shared := "/repo/.worktrees/busy"
+	sessions := []models.Session{
+		{Name: "a", Path: shared},
+		{Name: "b", Path: shared},
+		{Name: "c", Path: "/repo/.worktrees/quiet"},
+		{Name: "d", Path: ""}, // saved sessions have no path; must not count
+		{Name: "e", Path: ""},
+	}
+	got := sharedPaths(sessions)
+
+	if got[shared] != 2 {
+		t.Errorf("shared count = %d, want 2", got[shared])
+	}
+	if _, ok := got["/repo/.worktrees/quiet"]; ok {
+		t.Error("a path with one agent must not be reported as shared")
+	}
+	if _, ok := got[""]; ok {
+		t.Error("empty paths must not be reported as shared")
+	}
+}
+
+// Ctrl+x must not take a repo's other worktrees down with it.
+func TestKillTarget(t *testing.T) {
+	multi := []models.Session{
+		{Name: "repo/a", SessionName: "repo", WindowIndex: 0},
+		{Name: "repo/b", SessionName: "repo", WindowIndex: 1},
+	}
+	target, isWindow := killTarget(multi[1], multi)
+	if !isWindow {
+		t.Error("a session with sibling agent panes must be killed by window")
+	}
+	if target != "repo:1" {
+		t.Errorf("target = %q, want repo:1", target)
+	}
+
+	lone := []models.Session{{Name: "solo", SessionName: "solo", WindowIndex: 0}}
+	target, isWindow = killTarget(lone[0], lone)
+	if isWindow {
+		t.Error("a single-pane session must still be killed whole")
+	}
+	if target != "solo" {
+		t.Errorf("target = %q, want solo", target)
+	}
+}
+
+// The detail pane re-renders every frame for the pulse, so a lookup must hit
+// the cache after the first call rather than shelling out to git again.
+func TestWorkForCachesByPath(t *testing.T) {
+	m := Model{workCache: map[string]git.Work{
+		"/repo/wt": {Dirty: 3, Ahead: 1, HasUpstream: true},
+	}}
+
+	got := m.workFor(models.Session{Path: "/repo/wt"})
+	if got.Dirty != 3 || got.Ahead != 1 {
+		t.Errorf("workFor = %+v, want the cached value", got)
+	}
+	// A session with no path must not be probed at all.
+	if got := m.workFor(models.Session{}); got != (git.Work{}) {
+		t.Errorf("workFor(no path) = %+v, want zero", got)
+	}
+}
+
+// A nil cache means "do not touch git", so a zero Model stays render-safe.
+func TestWorkForNilCacheIsInert(t *testing.T) {
+	var m Model
+	if got := m.workFor(models.Session{Path: "/repo/wt"}); got != (git.Work{}) {
+		t.Errorf("workFor with nil cache = %+v, want zero", got)
 	}
 }

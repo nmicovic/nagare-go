@@ -97,7 +97,7 @@ func helpOverlay(width, height int) string {
 		line("Enter", "Jump to session / Load saved session"),
 		line("Ctrl+s", "Toggle saved (unloaded) sessions"),
 		line("Ctrl+w", "Unload agent (kill pane)"),
-		line("Ctrl+x", "Kill entire tmux session"),
+		line("Ctrl+x", "Kill this pane's window, or the session if it is the only one"),
 		line("F2", "Rename session"),
 		line("F3", "New git worktree for this repo"),
 		line("Ctrl+n", "Create new session"),

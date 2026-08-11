@@ -1377,7 +1377,7 @@ func (m Model) renderListView(width, height int) string {
 		} else {
 			branch = ""
 		}
-		right := starStyled + mutedStyle().Render(branch)
+		branchStyled := mutedStyle().Render(branch)
 
 		// Selection: tint the row background (crush / lazygit / gh-dash
 		// convention) — no caret or gutter rune. Bold the text for an
@@ -1395,16 +1395,25 @@ func (m Model) renderListView(width, height int) string {
 		nameStyled := renderNameWithMatches(name, row.Label, m.query(), nameStyle, c.Accent)
 		prefixStyled := mutedStyle().Render(prefix)
 
-		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
+		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) -
+			lipgloss.Width(nameStyled) - lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
 		if gap < 1 {
 			gap = 1
 		}
-		content := fmt.Sprintf(" %s %s%s%s%s", dot, prefixStyled, nameStyled, strings.Repeat(" ", gap), right)
-		line := lipgloss.NewStyle().
-			Background(rowBg).
-			Width(width).
-			Render(content)
-		lines = append(lines, line)
+
+		// Each segment carries the row background itself. Wrapping the finished
+		// string in one background style does not work: every inner style ends
+		// with a full reset, which clears the background for everything after
+		// it — leaving the tint on only the first and last column.
+		bg := lipgloss.NewStyle().Background(rowBg)
+		var content strings.Builder
+		for _, part := range []string{
+			" ", dot, " ", prefixStyled, nameStyled,
+			strings.Repeat(" ", gap), starStyled, branchStyled, strings.Repeat(" ", rowGutter),
+		} {
+			content.WriteString(bg.Render(part))
+		}
+		lines = append(lines, bg.Width(width).Render(content.String()))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1430,8 +1439,14 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	content := fmt.Sprintf(" %s%s%s", name, strings.Repeat(" ", gap), count)
-	return lipgloss.NewStyle().Background(c.Background).Width(width).Render(content)
+	// Per-segment background, for the same reason as the session rows: an inner
+	// reset would drop the tint for everything after it.
+	bg := lipgloss.NewStyle().Background(c.Background)
+	var content strings.Builder
+	for _, part := range []string{" ", name, strings.Repeat(" ", gap), count, strings.Repeat(" ", rowGutter)} {
+		content.WriteString(bg.Render(part))
+	}
+	return bg.Width(width).Render(content.String())
 }
 
 func (m Model) renderGridView(width, height int) string {

@@ -11,6 +11,7 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 
 - **Session Picker** — fuzzy search, list/grid views, live tmux preview
 - **Real-time Status** — hooks, plugins, and extensions detect agent state (idle/working/waiting/dead)
+- **Worktree Aware** — panes in different git worktrees of one repo show their own path, branch, and name
 - **Notifications** — toast, bell, OS notifications, popup when agents need attention
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)

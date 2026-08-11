@@ -34,7 +34,8 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 
 - `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
-- `internal/tmux` — scanner (list-panes + /proc descendant walk), status detection (pane scraping)
+- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
+- `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
 - `internal/state` — state files + session registry
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
@@ -49,6 +50,17 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/bin` — shared binary finder
 - `internal/fsutil` — atomic file writes
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
+
+### Worktrees
+
+Each agent pane resolves its own directory from `pane_current_path`, not the tmux
+session path, so panes in different worktrees of one repo get their own path, branch,
+and name (`{session}/{worktree}`). Worktree detection is structural — the git common
+dir's parent differs from the toplevel — so hand-made worktrees work the same as
+Claude Code's `.claude/worktrees/`.
+
+Display-name precedence is: a window name the user set, then the worktree, then
+`{agent}_NN`.
 
 ## Agent Integrations
 

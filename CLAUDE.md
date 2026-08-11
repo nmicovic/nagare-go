@@ -24,6 +24,7 @@ nagare-go setup            # install status reporting + MCP server + slash comma
 nagare-go notifs           # notification center TUI
 nagare-go popup-notif      # popup notification (called by hooks)
 nagare-go new [path]       # create new agent session
+nagare-go new <repo> -w <name>  # create a named git worktree and start an agent in it
 nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
 ```
@@ -61,6 +62,17 @@ Claude Code's `.claude/worktrees/`.
 
 Display-name precedence is: a window name the user set, then the worktree, then
 `{agent}_NN`.
+
+Worktree sessions are created by `session.CreateWorktree`. Claude Code has its own
+`-w <name>` flag, so it is handed the flag and creates the worktree under
+`.claude/worktrees/`; every other agent has no equivalent, so nagare runs
+`git worktree add` into `.worktrees/` and opens the pane there. `--tmux` is never
+passed to Claude — nagare already made the window.
+
+A worktree pane always joins its repo's existing tmux session as a new window, which is
+what lets the picker group them. Sessions are matched to a repo through
+`git.MainRoot`, not by literal path, because a session's own directory is often a
+worktree.
 
 In the list view, sessions sharing a tmux session name are grouped under a single
 header row naming the repo, and children show only their own name — so the repo
@@ -109,6 +121,7 @@ belong in `internal/setup`, not in the installed files.
 | Ctrl+w | Unload agent pane |
 | Ctrl+x | Kill tmux session |
 | F2 | Rename session |
+| F3 | New git worktree for this repo |
 | Ctrl+n | New session form |
 | Ctrl+r | Quick prototype |
 | Ctrl+l | Inline prompt |

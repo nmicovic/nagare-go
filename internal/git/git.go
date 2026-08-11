@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -131,4 +132,52 @@ func AddWorktree(repoRoot, name string) (string, error) {
 // to start.
 func ClaudeWorktreePath(repoRoot, name string) string {
 	return filepath.Join(repoRoot, ".claude", "worktrees", name)
+}
+
+// Work describes outstanding work in a checkout. The zero value is what a
+// non-repository yields, and reads as "nothing to report".
+type Work struct {
+	Dirty       int  // changed files, tracked or not
+	Ahead       int  // commits ahead of the upstream branch
+	HasUpstream bool // false when the branch tracks nothing
+}
+
+// WorkStatus reports what is outstanding in dir. It is deliberately cheap —
+// two git calls — because callers run it on selection rather than per frame.
+//
+// Ahead is only meaningful with an upstream; without one there is no
+// non-arbitrary base to count against, so HasUpstream stays false and callers
+// show only the dirty count.
+func WorkStatus(dir string) Work {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return Work{}
+	}
+
+	var w Work
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if strings.TrimSpace(line) != "" {
+			w.Dirty++
+		}
+	}
+
+	if out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "@{u}..HEAD").Output(); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+			w.Ahead = n
+			w.HasUpstream = true
+		}
+	}
+	return w
+}
+
+// RemoveWorktree removes the worktree at path. It never passes --force, so git
+// refuses while the worktree holds uncommitted work — the guard that keeps this
+// from deleting someone's unsaved changes. The branch is left alone so its
+// commits survive.
+func RemoveWorktree(path string) error {
+	out, err := exec.Command("git", "-C", path, "worktree", "remove", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree remove: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

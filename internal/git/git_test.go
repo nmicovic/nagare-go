@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -180,5 +181,80 @@ func TestAddWorktreeAndMainRoot(t *testing.T) {
 func TestMainRootOutsideRepo(t *testing.T) {
 	if got := MainRoot(t.TempDir()); got != "" {
 		t.Errorf("MainRoot(non-repo) = %q, want empty", got)
+	}
+}
+
+func TestWorkStatus(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repoDir := filepath.Join(t.TempDir(), "app")
+	initRepo(t, repoDir)
+
+	// Clean checkout, no upstream configured.
+	got := WorkStatus(repoDir)
+	if got.Dirty != 0 {
+		t.Errorf("clean repo Dirty = %d, want 0", got.Dirty)
+	}
+	if got.HasUpstream {
+		t.Error("HasUpstream = true, but no remote is configured")
+	}
+
+	// Two changed files: one modified, one untracked.
+	if err := os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("changed"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "new.txt"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := WorkStatus(repoDir); got.Dirty != 2 {
+		t.Errorf("Dirty = %d, want 2", got.Dirty)
+	}
+
+	// A non-repo must not report phantom work.
+	if got := WorkStatus(t.TempDir()); got != (Work{}) {
+		t.Errorf("non-repo WorkStatus = %+v, want zero value", got)
+	}
+}
+
+func TestRemoveWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repoDir := filepath.Join(t.TempDir(), "app")
+	initRepo(t, repoDir)
+
+	path, err := AddWorktree(repoDir, "throwaway")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Uncommitted work must block removal — that is the whole guard.
+	if err := os.WriteFile(filepath.Join(path, "wip.txt"), []byte("wip"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveWorktree(path); err == nil {
+		t.Error("RemoveWorktree with uncommitted work = nil, want an error")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Error("worktree was removed despite uncommitted work")
+	}
+
+	// Clean it and removal succeeds; the branch survives.
+	if err := os.Remove(filepath.Join(path, "wip.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveWorktree(path); err != nil {
+		t.Fatalf("RemoveWorktree on a clean worktree: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("worktree directory still exists after removal")
+	}
+	out, err := exec.Command("git", "-C", repoDir, "branch", "--list", "throwaway").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		t.Error("branch was deleted; commits on it would be lost")
 	}
 }

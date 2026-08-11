@@ -152,6 +152,8 @@ func agentCommand(agent, projectPath string, continueSession bool) string {
 		return "opencode"
 	case "gemini":
 		return "gemini"
+	case "crush":
+		return "crush"
 	case "pi":
 		if continueSession {
 			return "pi -c"

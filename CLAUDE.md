@@ -62,6 +62,13 @@ Claude Code's `.claude/worktrees/`.
 Display-name precedence is: a window name the user set, then the worktree, then
 `{agent}_NN`.
 
+In the list view, sessions sharing a tmux session name are grouped under a single
+header row naming the repo, and children show only their own name — so the repo
+prefix is not repeated on every row. Grouping starts at two members; a lone session
+renders as a plain row. A group takes the position of its most urgent member, so a
+waiting worktree lifts its whole repo. Rows are derived per frame by
+`picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
+
 ## Agent Integrations
 
 Every agent reports status through one interface: `nagare-go hook-state` reading a JSON

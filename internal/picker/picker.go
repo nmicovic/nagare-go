@@ -200,8 +200,13 @@ func (m *Model) applyGridOrder(visible []models.Session) {
 	m.gridOrder = order
 }
 
-// isStarred returns whether a session is starred in the registry.
+// isStarred returns whether a session is starred in the registry. A Model
+// without a registry has no stars rather than panicking, which keeps sorting
+// testable in isolation.
 func (m Model) isStarred(name string) bool {
+	if m.registry == nil {
+		return false
+	}
 	s := m.registry.Find(name)
 	return s != nil && s.Starred
 }
@@ -901,6 +906,14 @@ func (m *Model) applyFilter() {
 	}
 }
 
+// sortFiltered orders m.filtered into the order it is displayed in. Sessions
+// sharing a tmux session name are kept contiguous so the list view can put a
+// single header above them, and each group takes the position of its most
+// urgent member — a waiting worktree lifts its whole repo rather than being
+// buried inside a quiet group.
+//
+// A lone session is a group of one and is its own representative, so a list
+// with nothing to group sorts exactly as a flat list always did.
 func (m *Model) sortFiltered() {
 	// Pre-build starred set to avoid per-comparison registry lookups
 	starred := make(map[string]bool)
@@ -908,21 +921,71 @@ func (m *Model) sortFiltered() {
 		starred[s.Name] = m.isStarred(s.Name)
 	}
 
-	sort.SliceStable(m.filtered, func(i, j int) bool {
-		si := starred[m.filtered[i].Name]
-		sj := starred[m.filtered[j].Name]
-		if si != sj {
-			return si
+	// less is the comparator the flat list has always used: stars first, then
+	// the active sort mode.
+	less := func(a, b models.Session) bool {
+		if sa, sb := starred[a.Name], starred[b.Name]; sa != sb {
+			return sa
 		}
 		switch m.sortMode {
 		case SortByName:
-			return m.filtered[i].Name < m.filtered[j].Name
+			return a.Name < b.Name
 		case SortByAgent:
-			return m.filtered[i].AgentType < m.filtered[j].AgentType
+			return a.AgentType < b.AgentType
 		default: // SortByStatus
-			return statusOrder(m.filtered[i].Status) < statusOrder(m.filtered[j].Status)
+			return statusOrder(a.Status) < statusOrder(b.Status)
 		}
+	}
+
+	// Urgency is independent of the active sort mode: a waiting child has to
+	// lift its group even when sorting by name.
+	moreUrgent := func(a, b models.Session) bool {
+		if sa, sb := starred[a.Name], starred[b.Name]; sa != sb {
+			return sa
+		}
+		return statusOrder(a.Status) < statusOrder(b.Status)
+	}
+
+	var keys []string
+	groups := make(map[string][]models.Session)
+	for _, s := range m.filtered {
+		key := groupKeyOf(s)
+		if _, seen := groups[key]; !seen {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], s)
+	}
+
+	reps := make(map[string]models.Session, len(groups))
+	for key, members := range groups {
+		sort.SliceStable(members, func(i, j int) bool { return less(members[i], members[j]) })
+		groups[key] = members
+
+		rep := members[0]
+		for _, s := range members[1:] {
+			if moreUrgent(s, rep) {
+				rep = s
+			}
+		}
+		reps[key] = rep
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		a, b := reps[keys[i]], reps[keys[j]]
+		if less(a, b) {
+			return true
+		}
+		if less(b, a) {
+			return false
+		}
+		return keys[i] < keys[j] // stable tie-break so the list never jitters
 	})
+
+	ordered := make([]models.Session, 0, len(m.filtered))
+	for _, key := range keys {
+		ordered = append(ordered, groups[key]...)
+	}
+	m.filtered = ordered
 }
 
 func statusOrder(s models.SessionStatus) int {

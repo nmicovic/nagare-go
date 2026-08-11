@@ -172,3 +172,90 @@ func TestChildLabel(t *testing.T) {
 		}
 	}
 }
+
+// names returns the visual order of a sorted session slice.
+func names(sessions []models.Session) []string {
+	out := make([]string, len(sessions))
+	for i, s := range sessions {
+		out[i] = s.Name
+	}
+	return out
+}
+
+// A waiting child must lift its whole repo above a quiet one, otherwise
+// grouping buries the one thing the picker exists to surface.
+func TestSortFilteredWaitingChildLiftsGroup(t *testing.T) {
+	m := Model{sortMode: SortByStatus}
+	m.filtered = []models.Session{
+		solo("aaa-quiet", models.StatusIdle),
+		wt("zzz-busy", "one", models.StatusIdle),
+		wt("zzz-busy", "two", models.StatusWaitingInput),
+	}
+	m.sortFiltered()
+
+	if got := names(m.filtered)[0]; got != "zzz-busy/two" && got != "zzz-busy/one" {
+		t.Errorf("first row = %q, want a zzz-busy member (it has a waiting child)", got)
+	}
+	if last := names(m.filtered)[2]; last != "aaa-quiet" {
+		t.Errorf("last row = %q, want aaa-quiet", last)
+	}
+}
+
+// Group members must stay contiguous or buildRows emits duplicate headers.
+func TestSortFilteredKeepsGroupsContiguous(t *testing.T) {
+	m := Model{sortMode: SortByStatus}
+	m.filtered = []models.Session{
+		wt("repo-a", "one", models.StatusIdle),
+		wt("repo-b", "one", models.StatusWaitingInput),
+		wt("repo-a", "two", models.StatusWaitingInput),
+		wt("repo-b", "two", models.StatusIdle),
+	}
+	m.sortFiltered()
+
+	seen := map[string]bool{}
+	prev := ""
+	for _, s := range m.filtered {
+		key := groupKeyOf(s)
+		if key != prev {
+			if seen[key] {
+				t.Fatalf("group %q is not contiguous: %v", key, names(m.filtered))
+			}
+			seen[key] = true
+			prev = key
+		}
+	}
+}
+
+// Within a group the active sort mode still applies.
+func TestSortFilteredWithinGroupFollowsMode(t *testing.T) {
+	m := Model{sortMode: SortByName}
+	m.filtered = []models.Session{
+		wt("repo", "zebra", models.StatusIdle),
+		wt("repo", "alpha", models.StatusIdle),
+	}
+	m.sortFiltered()
+
+	if got := names(m.filtered); got[0] != "repo/alpha" {
+		t.Errorf("order = %v, want alpha first under SortByName", got)
+	}
+}
+
+// With no groups at all, ordering must match the old flat behaviour.
+func TestSortFilteredSingletonRegression(t *testing.T) {
+	m := Model{sortMode: SortByStatus}
+	m.filtered = []models.Session{
+		solo("idle-one", models.StatusIdle),
+		solo("dead-one", models.StatusDead),
+		solo("waiting-one", models.StatusWaitingInput),
+		solo("running-one", models.StatusRunning),
+	}
+	m.sortFiltered()
+
+	want := []string{"waiting-one", "running-one", "idle-one", "dead-one"}
+	got := names(m.filtered)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}

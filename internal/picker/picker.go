@@ -1195,6 +1195,12 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if s.Details.GitBranch != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))
 	}
+	// Name the repo a worktree belongs to — the display name only carries the
+	// worktree, so without this a worktree pane never says what it forked from.
+	if s.Details.RepoName != "" && s.Details.Worktree != "" {
+		repo := fmt.Sprintf("%s (worktree %s)", s.Details.RepoName, s.Details.Worktree)
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Repo  "), val.Render(repo)))
+	}
 	if s.Details.LastActivity != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))
 	}

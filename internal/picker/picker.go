@@ -85,6 +85,8 @@ type Model struct {
 	registry      *state.Registry
 	renameMode    bool
 	renameSession models.Session
+	worktreeMode  bool
+	worktreeOn    models.Session
 	result        Result
 	promptMode    bool
 	promptTarget  models.Session
@@ -395,6 +397,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleRenameKey(msg)
 	}
 
+	// Worktree-name entry intercepts keys the same way
+	if m.worktreeMode {
+		return m.handleWorktreeKey(msg)
+	}
+
 	// Prompt mode intercepts keys
 	if m.promptMode {
 		return m.handlePromptKey(msg)
@@ -563,6 +570,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.CursorEnd()
 		}
 		return m, nil
+	case keyNewWorktree:
+		if s, ok := m.selectedSession(); ok {
+			m.worktreeMode = true
+			m.worktreeOn = s
+			m.searchInput.SetValue("")
+		}
+		return m, nil
 	case keyNewSession:
 		m.result = Result{Action: ActionNew}
 		return m, tea.Quit
@@ -594,6 +608,37 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// handleWorktreeKey handles key input while naming a new worktree. The name is
+// typed into the search input, the same field rename mode borrows.
+func (m Model) handleWorktreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case keyEscape:
+		m.worktreeMode = false
+		m.searchInput.SetValue("")
+		return m, nil
+	case keyEnter:
+		name := strings.TrimSpace(m.searchInput.Value())
+		m.worktreeMode = false
+		m.searchInput.SetValue("")
+		if name == "" {
+			return m, nil
+		}
+		// The agent inherits from the session the worktree is spawned off, so
+		// a repo full of Claude panes keeps getting Claude panes.
+		sessName, err := session.CreateWorktree(m.worktreeOn.Path, name, string(m.worktreeOn.AgentType))
+		if err != nil {
+			log.Info("worktree %q failed: %v", name, err)
+			return m, nil
+		}
+		log.Info("created worktree %s in session %s", name, sessName)
+		return m, doScan(m.statesDir)
+	default:
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
 }
 
 // handleRenameKey handles key input during rename mode.
@@ -1071,6 +1116,8 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	// Search input (always active)
 	if m.renameMode {
 		m.searchInput.Prompt = " Rename: "
+	} else if m.worktreeMode {
+		m.searchInput.Prompt = " New worktree: "
 	} else {
 		m.searchInput.Prompt = " > "
 	}

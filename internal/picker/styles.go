@@ -16,6 +16,9 @@ const (
 	// rowGutter is the blank column kept at the right edge of a list row or
 	// grid cell, so nothing renders flush against the panel border.
 	rowGutter = 1
+	// minBranchWidth is the floor for the branch column in a list row. Below
+	// this a branch is too clipped to identify, so the label yields instead.
+	minBranchWidth = 8
 	// minNameWidth is the floor for a name column. Below this a name is all
 	// ellipsis and conveys nothing, so narrow panels overflow instead.
 	minNameWidth = 6

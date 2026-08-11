@@ -417,3 +417,57 @@ func TestConfirmIgnoresUnrelatedKeys(t *testing.T) {
 		}
 	}
 }
+
+// A worktree's branch is "worktree-" plus the label the row already shows, so
+// printing it wastes the columns a real branch needs.
+func TestBranchFor(t *testing.T) {
+	tests := []struct {
+		label, worktree, branch, want string
+	}{
+		{"the-site", "the-site", "worktree-the-site", ""},
+		{"shipping", "shipping", "worktree-shipping", ""},
+		{"main-checkout", "", "main-checkout", ""},
+		{"", "", "", ""},
+		// A lone pane in a worktree is labelled with its full name, so the
+		// branch has to be checked against the worktree too.
+		{"cosmiclab-frontend/splat-zoomin", "splat-zoomin", "worktree-splat-zoomin", ""},
+		{"cosmiclab-backend", "", "feat/splat_loader", "feat/splat_loader"},
+		{"cosmo-ai", "", "fix/slack-approval-observability", "fix/slack-approval-observability"},
+		{"nagare", "", "main", "main"},
+		// A worktree on a branch of its own name still says something.
+		{"repo/wt", "wt", "feat/real-branch", "feat/real-branch"},
+	}
+	for _, tt := range tests {
+		if got := branchFor(tt.label, tt.worktree, tt.branch); got != tt.want {
+			t.Errorf("branchFor(%q, %q, %q) = %q, want %q", tt.label, tt.worktree, tt.branch, got, tt.want)
+		}
+	}
+}
+
+func TestSplitRowWidth(t *testing.T) {
+	// No branch: the label gets everything.
+	if l, b := splitRowWidth(40, 12, 0); l != 40 || b != 0 {
+		t.Errorf("no branch: got label=%d branch=%d, want 40/0", l, b)
+	}
+
+	// A short label leaves the branch plenty — the real case that motivated
+	// this: "cosmo-ai" plus a 32-character branch must both fit.
+	l, b := splitRowWidth(41, 8, 32)
+	if l != 8 || b != 32 {
+		t.Errorf("short label: got label=%d branch=%d, want 8/32", l, b)
+	}
+
+	// A long label yields rather than clipping the branch to nothing.
+	l, b = splitRowWidth(40, 38, 20)
+	if b < minBranchWidth {
+		t.Errorf("branch squeezed to %d, want at least %d", b, minBranchWidth)
+	}
+	if l+b+1 > 40 {
+		t.Errorf("label+branch = %d, overflows 40", l+b+1)
+	}
+
+	// Degenerate width must not produce negatives.
+	if l, b := splitRowWidth(5, 30, 30); l < 1 || b < 0 {
+		t.Errorf("tiny width: got label=%d branch=%d", l, b)
+	}
+}

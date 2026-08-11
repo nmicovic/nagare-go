@@ -121,3 +121,47 @@ func killTarget(s models.Session, sessions []models.Session) (string, bool) {
 	}
 	return s.SessionName, false
 }
+
+// branchFor returns the branch text a list row should show, or "" when it would
+// only repeat what the row already says.
+//
+// Claude names a worktree's branch "worktree-<name>", so printing it adds
+// nothing while costing the columns a real branch needs. The comparison is
+// against the worktree name as well as the label, because a lone pane in a
+// worktree is labelled with its full "{session}/{worktree}" name rather than the
+// bare worktree — matching only the label would let that case slip through.
+//
+// Plain sessions are the opposite case: their branch (feat/foo, fix/bar) cannot
+// be guessed from the name, and showing it is the entire point.
+func branchFor(label, worktree, branch string) string {
+	if branch == "" {
+		return ""
+	}
+	for _, redundant := range []string{label, worktree, "worktree-" + label, "worktree-" + worktree} {
+		if branch == redundant {
+			return ""
+		}
+	}
+	return branch
+}
+
+// splitRowWidth divides the columns available to a row's text between its label
+// and its branch. The label takes what it needs, but never so much that the
+// branch drops below minBranchWidth; the branch then takes the remainder.
+func splitRowWidth(avail, labelLen, branchLen int) (labelW, branchW int) {
+	if branchLen == 0 {
+		return avail, 0
+	}
+	labelW = labelLen
+	if max := avail - minBranchWidth - 1; labelW > max {
+		labelW = max
+	}
+	if labelW < 1 {
+		labelW = 1
+	}
+	branchW = avail - labelW - 1
+	if branchW < 0 {
+		branchW = 0
+	}
+	return labelW, branchW
+}

@@ -53,6 +53,35 @@ func TestParseRevParse(t *testing.T) {
 	}
 }
 
+// gitRun runs git in dir, failing the test on error. The environment is stripped
+// of the developer's real git identity and hooks so the sandbox is reproducible.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// initRepo creates a git repository at dir on branch "dev" with one commit.
+func initRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "init", "-q", "-b", "dev")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-qm", "init")
+}
+
 func TestDescribeRealRepoAndWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -60,33 +89,10 @@ func TestDescribeRealRepoAndWorktree(t *testing.T) {
 
 	root := t.TempDir()
 	repoDir := filepath.Join(root, "app")
-
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		// Keep the sandbox free of the developer's real git identity/hooks.
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	if err := os.MkdirAll(repoDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	run(repoDir, "init", "-q", "-b", "dev")
-	if err := os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("x"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	run(repoDir, "add", ".")
-	run(repoDir, "commit", "-qm", "init")
+	initRepo(t, repoDir)
 
 	wtDir := filepath.Join(repoDir, ".claude", "worktrees", "the-site")
-	run(repoDir, "worktree", "add", "-q", "-b", "worktree-the-site", wtDir)
+	gitRun(t, repoDir, "worktree", "add", "-q", "-b", "worktree-the-site", wtDir)
 
 	main := Describe(repoDir)
 	if main.IsWorktree {
@@ -105,7 +111,7 @@ func TestDescribeRealRepoAndWorktree(t *testing.T) {
 	}
 
 	// A detached worktree HEAD must report no branch, not "HEAD".
-	run(wtDir, "checkout", "-q", "--detach")
+	gitRun(t, wtDir, "checkout", "-q", "--detach")
 	if got := Describe(wtDir).Branch; got != "" {
 		t.Errorf("detached HEAD branch = %q, want empty", got)
 	}
@@ -113,5 +119,66 @@ func TestDescribeRealRepoAndWorktree(t *testing.T) {
 	// A directory outside any repository must not panic or invent facts.
 	if got := Describe(root); got != (Repo{}) {
 		t.Errorf("non-repo = %+v, want zero value", got)
+	}
+}
+
+func TestValidWorktreeName(t *testing.T) {
+	valid := []string{"the-site", "shipping", "feat_2", "a", "v1.2"}
+	for _, name := range valid {
+		if err := ValidWorktreeName(name); err != nil {
+			t.Errorf("ValidWorktreeName(%q) = %v, want nil", name, err)
+		}
+	}
+	invalid := []string{"", "   ", "a/b", `a\b`, "..", ".", "-x", "a b", "a:b", "a~b"}
+	for _, name := range invalid {
+		if err := ValidWorktreeName(name); err == nil {
+			t.Errorf("ValidWorktreeName(%q) = nil, want an error", name)
+		}
+	}
+}
+
+func TestAddWorktreeAndMainRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	repoDir := filepath.Join(t.TempDir(), "app")
+	initRepo(t, repoDir)
+
+	path, err := AddWorktree(repoDir, "the-site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(repoDir, ".worktrees", "the-site")
+	if path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("worktree directory missing: %v", err)
+	}
+
+	// The new worktree must be detected as one, on its own branch.
+	got := Describe(path)
+	if !got.IsWorktree || got.Worktree != "the-site" || got.Branch != "the-site" {
+		t.Errorf("Describe(worktree) = %+v", got)
+	}
+
+	// MainRoot resolves back to the main checkout from either side.
+	if r := MainRoot(path); r != repoDir {
+		t.Errorf("MainRoot(worktree) = %q, want %q", r, repoDir)
+	}
+	if r := MainRoot(repoDir); r != repoDir {
+		t.Errorf("MainRoot(main) = %q, want %q", r, repoDir)
+	}
+
+	// A duplicate name must fail rather than silently reuse.
+	if _, err := AddWorktree(repoDir, "the-site"); err == nil {
+		t.Error("AddWorktree with a duplicate name = nil, want an error")
+	}
+}
+
+func TestMainRootOutsideRepo(t *testing.T) {
+	if got := MainRoot(t.TempDir()); got != "" {
+		t.Errorf("MainRoot(non-repo) = %q, want empty", got)
 	}
 }

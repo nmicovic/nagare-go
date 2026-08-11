@@ -170,11 +170,20 @@ func WorkStatus(dir string) Work {
 	return w
 }
 
-// RemoveWorktree removes the worktree at path. It never passes --force, so git
-// refuses while the worktree holds uncommitted work — the guard that keeps this
-// from deleting someone's unsaved changes. The branch is left alone so its
-// commits survive.
+// RemoveWorktree removes the worktree at path, refusing while it holds
+// uncommitted work. The branch is left alone so its commits survive.
+//
+// The dirty check is made here rather than left to git because Claude Code locks
+// the worktrees it creates, and git refuses to remove a locked worktree unless
+// --force is passed — which would also override the dirty check. So nagare
+// verifies cleanliness itself, unlocks, and then removes without --force.
 func RemoveWorktree(path string) error {
+	if w := WorkStatus(path); w.Dirty > 0 {
+		return fmt.Errorf("worktree has %d uncommitted change(s); commit or discard them first", w.Dirty)
+	}
+	// Best-effort: fails harmlessly when the worktree was never locked.
+	exec.Command("git", "-C", path, "worktree", "unlock", path).Run()
+
 	out, err := exec.Command("git", "-C", path, "worktree", "remove", path).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git worktree remove: %w: %s", err, strings.TrimSpace(string(out)))

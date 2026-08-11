@@ -227,6 +227,16 @@ func (m Model) workFor(s models.Session) git.Work {
 	return w
 }
 
+// query returns the active search text. Rename and new-worktree modes borrow the
+// same input field for typing a name, so the text is not a search query then —
+// without this the list filters itself down as you type a worktree name.
+func (m Model) query() string {
+	if m.renameMode || m.worktreeMode || m.confirmMode {
+		return ""
+	}
+	return m.searchInput.Value()
+}
+
 // isStarred returns whether a session is starred in the registry. A Model
 // without a registry has no stars rather than panicking, which keeps sorting
 // testable in isolation.
@@ -657,11 +667,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleConfirmKey answers the pending worktree-removal confirmation. Anything
 // other than an explicit yes declines, since the action deletes a directory.
 func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.confirmMode = false
-	if key := msg.String(); key != "y" && key != "Y" {
+	switch msg.String() {
+	case "y", "Y":
+		// fall through to removal below
+	case "n", "N", keyEscape, keyEnter:
+		m.confirmMode = false
 		log.Info("kept worktree %s", m.confirmOn.Details.Worktree)
 		return m, nil
+	default:
+		// Ignore unrelated keys rather than treating them as an answer: a
+		// stray keystroke used to dismiss this silently.
+		return m, nil
 	}
+	m.confirmMode = false
 	// git refuses while the worktree holds uncommitted work, so a mistaken yes
 	// cannot destroy unsaved changes.
 	if err := git.RemoveWorktree(m.confirmOn.Path); err != nil {
@@ -964,7 +982,7 @@ func (m *Model) applyFilter() {
 		}
 	}
 
-	query := m.searchInput.Value()
+	query := m.query()
 	queryChanged := query != m.lastQuery
 	m.lastQuery = query
 
@@ -1180,12 +1198,23 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 		m.searchInput.Prompt = " Rename: "
 	} else if m.worktreeMode {
 		m.searchInput.Prompt = " New worktree: "
-	} else if m.confirmMode {
-		m.searchInput.Prompt = fmt.Sprintf(" Remove worktree %q? (y/N) ", m.confirmOn.Details.Worktree)
 	} else {
 		m.searchInput.Prompt = " > "
 	}
-	b.WriteString(m.searchInput.View())
+	if m.confirmMode {
+		// A destructive question must not hide in the search prompt, where a
+		// stray keystroke answered it before anyone noticed it was asked.
+		c := theme.Current().Colors
+		banner := lipgloss.NewStyle().
+			Foreground(c.Background).
+			Background(c.Warning).
+			Bold(true).
+			Padding(0, 1).
+			Render(fmt.Sprintf("Remove worktree %q?  y = delete   n = keep", m.confirmOn.Details.Worktree))
+		b.WriteString(" " + banner)
+	} else {
+		b.WriteString(m.searchInput.View())
+	}
 	b.WriteString("\n\n")
 
 	// Session list.
@@ -1301,7 +1330,7 @@ func (m Model) renderListView(width, height int) string {
 		// Highlight matches against the label actually shown: a query that only
 		// hit the repo portion has nothing to mark on the child, and the header
 		// above carries that text.
-		nameStyled := renderNameWithMatches(name, row.Label, m.searchInput.Value(), nameStyle, c.Accent)
+		nameStyled := renderNameWithMatches(name, row.Label, m.query(), nameStyle, c.Accent)
 		prefixStyled := mutedStyle().Render(prefix)
 
 		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
@@ -1378,7 +1407,7 @@ func (m Model) renderGridView(width, height int) string {
 				cellBg = c.SelBg
 				nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
 			}
-			nameStyled := renderNameWithMatches(name, s.Name, m.searchInput.Value(), nameStyle, c.Accent)
+			nameStyled := renderNameWithMatches(name, s.Name, m.query(), nameStyle, c.Accent)
 			content := fmt.Sprintf(" %s %s", dot, nameStyled)
 			cell := lipgloss.NewStyle().
 				Background(cellBg).

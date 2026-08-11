@@ -258,3 +258,42 @@ func TestRemoveWorktree(t *testing.T) {
 		t.Error("branch was deleted; commits on it would be lost")
 	}
 }
+
+// Claude Code locks the worktrees it creates, and git refuses to remove a locked
+// worktree without --force — which would also defeat the dirty guard. Removal
+// must therefore handle a locked-but-clean worktree, and still refuse a dirty one.
+func TestRemoveWorktreeLocked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repoDir := filepath.Join(t.TempDir(), "app")
+	initRepo(t, repoDir)
+
+	path, err := AddWorktree(repoDir, "locked-wt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repoDir, "worktree", "lock", path)
+
+	// Locked and dirty: still refused, and nothing is deleted.
+	if err := os.WriteFile(filepath.Join(path, "wip.txt"), []byte("wip"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveWorktree(path); err == nil {
+		t.Error("RemoveWorktree on a locked, dirty worktree = nil, want an error")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("worktree was removed despite uncommitted work")
+	}
+
+	// Locked and clean: removal succeeds.
+	if err := os.Remove(filepath.Join(path, "wip.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveWorktree(path); err != nil {
+		t.Fatalf("RemoveWorktree on a locked, clean worktree: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("locked worktree still exists after removal")
+	}
+}

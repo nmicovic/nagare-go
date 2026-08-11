@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/models"
@@ -367,5 +369,51 @@ func TestWorkForNilCacheIsInert(t *testing.T) {
 	var m Model
 	if got := m.workFor(models.Session{Path: "/repo/wt"}); got != (git.Work{}) {
 		t.Errorf("workFor with nil cache = %+v, want zero", got)
+	}
+}
+
+// Typing a worktree name must not double as a search query — the list used to
+// filter itself away underneath the name being typed.
+func TestQueryIgnoresNameEntryModes(t *testing.T) {
+	m := Model{searchInput: textinput.New()}
+	m.searchInput.SetValue("test-worktree")
+
+	if got := m.query(); got != "test-worktree" {
+		t.Errorf("query() = %q, want the search text when no mode is active", got)
+	}
+	for _, tc := range []struct {
+		name  string
+		apply func(*Model)
+	}{
+		{"worktree", func(m *Model) { m.worktreeMode = true }},
+		{"rename", func(m *Model) { m.renameMode = true }},
+		{"confirm", func(m *Model) { m.confirmMode = true }},
+	} {
+		mm := Model{searchInput: textinput.New()}
+		mm.searchInput.SetValue("test-worktree")
+		tc.apply(&mm)
+		if got := mm.query(); got != "" {
+			t.Errorf("%s mode: query() = %q, want empty", tc.name, got)
+		}
+	}
+}
+
+// A destructive prompt must survive keys that are not an answer.
+func TestConfirmIgnoresUnrelatedKeys(t *testing.T) {
+	base := Model{confirmMode: true, confirmOn: models.Session{
+		Path: "/nonexistent", Details: models.SessionDetails{Worktree: "wt"},
+	}}
+
+	for _, key := range []string{"j", "down", "ctrl+f", "tab"} {
+		got, _ := base.handleConfirmKey(tea.KeyPressMsg{Code: 'x', Text: key})
+		if !got.(Model).confirmMode {
+			t.Errorf("key %q dismissed the confirmation", key)
+		}
+	}
+	for _, key := range []string{"n", "N", "esc", "enter"} {
+		got, _ := base.handleConfirmKey(tea.KeyPressMsg{Code: 'x', Text: key})
+		if got.(Model).confirmMode {
+			t.Errorf("key %q did not close the confirmation", key)
+		}
 	}
 }

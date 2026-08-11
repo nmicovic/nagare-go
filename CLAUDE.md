@@ -24,6 +24,7 @@ nagare-go setup            # install status reporting + MCP server + slash comma
 nagare-go notifs           # notification center TUI
 nagare-go popup-notif      # popup notification (called by hooks)
 nagare-go new [path]       # create new agent session
+nagare-go new <repo> -w <name>  # create a named git worktree and start an agent in it
 nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
 ```
@@ -34,7 +35,8 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 
 - `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
-- `internal/tmux` — scanner (list-panes + /proc descendant walk), status detection (pane scraping)
+- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
+- `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
 - `internal/state` — state files + session registry
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
@@ -49,6 +51,58 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/bin` — shared binary finder
 - `internal/fsutil` — atomic file writes
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
+
+### Worktrees
+
+Each agent pane resolves its own directory from `pane_current_path`, not the tmux
+session path, so panes in different worktrees of one repo get their own path, branch,
+and name (`{session}/{worktree}`). Worktree detection is structural — the git common
+dir's parent differs from the toplevel — so hand-made worktrees work the same as
+Claude Code's `.claude/worktrees/`.
+
+Display-name precedence is: a window name the user set, then the worktree, then
+`{agent}_NN`.
+
+Worktree sessions are created by `session.CreateWorktree`. Claude Code has its own
+`-w <name>` flag, so it is handed the flag and creates the worktree under
+`.claude/worktrees/`; every other agent has no equivalent, so nagare runs
+`git worktree add` into `.worktrees/` and opens the pane there. `--tmux` is never
+passed to Claude — nagare already made the window.
+
+A worktree pane always joins its repo's existing tmux session as a new window, which is
+what lets the picker group them. Sessions are matched to a repo through
+`git.MainRoot`, not by literal path, because a session's own directory is often a
+worktree.
+
+Because worktrees are windows in one session, Ctrl+x kills the *window* whenever a
+session holds more than one agent pane — killing the session would take a repo's other
+worktrees with it. On a worktree pane it then offers removal; `git.RemoveWorktree` never
+passes `--force`, so git refuses while there is uncommitted work, and the branch is left
+intact.
+
+Worktree creation runs as a `tea.Cmd`, never inline: doing it in the update loop froze
+the TUI for seconds. A spinner shows until the new agent pane appears in a scan
+(`pendingWorktree.satisfiedBy`) rather than until nagare's own work returns, because
+`claude -w` needs seconds more to build the worktree and start. Failures surface in the
+status line instead of only reaching the log.
+
+Removal is confirmed by a centred dialog (`renderConfirmOverlay`) drawn with
+`placeOverlay`, like the help and theme overlays; only `y`/`n`/`esc` answer it. Claude
+locks the worktrees it creates, so `git.RemoveWorktree` checks cleanliness itself,
+unlocks, then removes without `--force` — passing `--force` would override the dirty
+guard too.
+
+The detail pane shows outstanding work (`git.WorkStatus`) and warns when two agents
+share one directory. Work is cached per path and refreshed per scan: the pane
+re-renders every frame for the status-dot pulse, so git must never be called from
+render.
+
+In the list view, sessions sharing a tmux session name are grouped under a single
+header row naming the repo, and children show only their own name — so the repo
+prefix is not repeated on every row. Grouping starts at two members; a lone session
+renders as a plain row. A group takes the position of its most urgent member, so a
+waiting worktree lifts its whole repo. Rows are derived per frame by
+`picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
 
 ## Agent Integrations
 
@@ -88,8 +142,9 @@ belong in `internal/setup`, not in the installed files.
 | Ctrl+f | Toggle star |
 | Ctrl+o | Cycle sort mode |
 | Ctrl+w | Unload agent pane |
-| Ctrl+x | Kill tmux session |
+| Ctrl+x | Kill the pane's window (or the session if it is the only agent pane); offers to remove a worktree |
 | F2 | Rename session |
+| F3 | New git worktree for this repo |
 | Ctrl+n | New session form |
 | Ctrl+r | Quick prototype |
 | Ctrl+l | Inline prompt |

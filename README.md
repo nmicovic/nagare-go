@@ -11,6 +11,8 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 
 - **Session Picker** — fuzzy search, list/grid views, live tmux preview
 - **Real-time Status** — hooks, plugins, and extensions detect agent state (idle/working/waiting/dead)
+- **Worktree Aware** — panes in different git worktrees of one repo show their own path, branch, and name
+- **Worktree Launch** — `-w my-feature` or F3 starts an agent in a fresh named worktree, grouped under its repo
 - **Notifications** — toast, bell, OS notifications, popup when agents need attention
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)
@@ -63,7 +65,8 @@ Reload tmux config: `tmux source-file ~/.tmux.conf`
 
 ```bash
 nagare-go              # open session picker (default)
-nagare-go new ~/proj   # create new session with Claude (-a opencode|gemini|pi)
+nagare-go new ~/proj   # create new session with Claude (-a opencode|gemini|crush|pi)
+nagare-go new ~/proj -w my-feature   # start an agent in a new named git worktree
 nagare-go new myproto  # quick prototype (creates in ~/Prototypes/)
 nagare-go notifs       # notification center + settings
 nagare-go setup        # install status reporting + MCP server + slash commands

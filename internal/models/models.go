@@ -37,6 +37,8 @@ const (
 // SessionDetails holds metadata about a session.
 type SessionDetails struct {
 	GitBranch    string
+	Worktree     string // worktree directory basename, empty for a main checkout
+	RepoName     string // repository name, shared by a repo's worktrees
 	Model        string
 	ContextUsage string
 	LastActivity string // ISO 8601 timestamp of last hook event

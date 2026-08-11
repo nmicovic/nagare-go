@@ -17,6 +17,7 @@ func helpBar(width int) string {
 	pairs := []struct{ k, v string }{
 		{"F1", "Help"},
 		{"F2", "Rename"},
+		{"F3", "Wtree"},
 		{"Enter", "Jump"},
 		{"↑/↓", "Navigate"},
 		{"Tab", "View"},
@@ -96,8 +97,9 @@ func helpOverlay(width, height int) string {
 		line("Enter", "Jump to session / Load saved session"),
 		line("Ctrl+s", "Toggle saved (unloaded) sessions"),
 		line("Ctrl+w", "Unload agent (kill pane)"),
-		line("Ctrl+x", "Kill entire tmux session"),
+		line("Ctrl+x", "Kill this pane's window, or the session if it is the only one"),
 		line("F2", "Rename session"),
+		line("F3", "New git worktree for this repo"),
 		line("Ctrl+n", "Create new session"),
 		line("Ctrl+r", "Quick prototype"),
 		line("Ctrl+l", "Send inline prompt to session"),

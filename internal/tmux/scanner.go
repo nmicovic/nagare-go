@@ -3,11 +3,11 @@ package tmux
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/models"
 )
 
@@ -25,6 +25,7 @@ type PaneInfo struct {
 	AgentType   models.AgentType
 	WindowName  string
 	PaneID      string
+	Path        string // pane_current_path — the pane's own cwd, which may be a worktree
 }
 
 var agentProcesses = map[string]models.AgentType{
@@ -56,9 +57,9 @@ func ParseSessions(raw string) []RawSession {
 }
 
 // ParseAllPanes parses tmux list-panes -a output.
-// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}"
+// Format: "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}:#{pane_current_path}"
 // Returns agent panes grouped by session name.
-// Accepts 5-, 6-, or 7-field input for backward compatibility.
+// Accepts 5- through 8-field input for backward compatibility.
 func ParseAllPanes(raw string) map[string][]PaneInfo {
 	result := make(map[string][]PaneInfo)
 	for _, line := range strings.Split(raw, "\n") {
@@ -66,7 +67,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 7)
+		parts := strings.SplitN(line, ":", 8)
 		if len(parts) < 5 {
 			continue
 		}
@@ -83,6 +84,10 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 		if len(parts) >= 7 {
 			paneID = strings.TrimSpace(parts[6])
 		}
+		panePath := ""
+		if len(parts) >= 8 {
+			panePath = strings.TrimSpace(parts[7])
+		}
 
 		agentType, ok := agentProcesses[cmd]
 		if !ok {
@@ -98,6 +103,7 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 			AgentType:   agentType,
 			WindowName:  windowName,
 			PaneID:      paneID,
+			Path:        panePath,
 		})
 	}
 	return result
@@ -167,13 +173,15 @@ func isCustomWindowName(windowName, sessionName string) bool {
 }
 
 // ComputeDisplayNames returns a map from pane_id to display name for a set of
-// agent panes sharing a tmux session. When there's only one pane, the bare
-// session name is used. When multiple panes share the session, panes with a
-// custom window name use "{sessName}/{windowName}" and the rest get
-// "{sessName}/{agent}_NN" (1-based, per agent type, ordered by window/pane).
-func ComputeDisplayNames(sessName string, panes []PaneInfo) map[string]string {
+// agent panes sharing a tmux session. worktreeOf maps pane_id to a worktree
+// basename for panes sitting in a linked worktree, and may be nil.
+//
+// Name precedence, highest first: a window name the user set, the worktree the
+// pane sits in, then "{agent}_NN" (1-based, per agent type, ordered by
+// window/pane). A single pane outside a worktree keeps the bare session name.
+func ComputeDisplayNames(sessName string, panes []PaneInfo, worktreeOf map[string]string) map[string]string {
 	result := make(map[string]string, len(panes))
-	if len(panes) == 1 {
+	if len(panes) == 1 && worktreeOf[panes[0].PaneID] == "" {
 		result[panes[0].PaneID] = sessName
 		return result
 	}
@@ -187,26 +195,38 @@ func ComputeDisplayNames(sessName string, panes []PaneInfo) map[string]string {
 		return sorted[i].PaneIndex < sorted[j].PaneIndex
 	})
 
+	// labelFor returns the pane's preferred name fragment, or "" when it has
+	// none and must fall back to the numbered form.
+	labelFor := func(p PaneInfo) string {
+		if isCustomWindowName(p.WindowName, sessName) {
+			return p.WindowName
+		}
+		return worktreeOf[p.PaneID]
+	}
+
+	// Count labels first so the numbered fallback only applies where a label
+	// is actually shared by more than one pane.
+	taken := make(map[string]int)
+	for _, p := range sorted {
+		if label := labelFor(p); label != "" {
+			taken[label]++
+		}
+	}
+
 	counts := make(map[models.AgentType]int)
 	for _, p := range sorted {
-		if isCustomWindowName(p.WindowName, sessName) {
-			result[p.PaneID] = sessName + "/" + p.WindowName
+		label := labelFor(p)
+		if label != "" && taken[label] == 1 {
+			result[p.PaneID] = sessName + "/" + label
 			continue
 		}
 		counts[p.AgentType]++
-		result[p.PaneID] = fmt.Sprintf("%s/%s_%02d", sessName, p.AgentType, counts[p.AgentType])
+		if label == "" {
+			label = string(p.AgentType)
+		}
+		result[p.PaneID] = fmt.Sprintf("%s/%s_%02d", sessName, label, counts[p.AgentType])
 	}
 	return result
-}
-
-// gitBranch returns the current git branch for a directory, or "".
-func gitBranch(dir string) string {
-	cmd := exec.Command("git", "-C", dir, "branch", "--show-current")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // hookStateMap maps hook state strings to SessionStatus.
@@ -220,29 +240,57 @@ var hookStateMap = map[string]models.SessionStatus{
 // ScanSessions discovers all agent sessions in tmux.
 // paneStates should be pre-loaded via state.LoadStatesByPaneID() and
 // cwdStates via state.LoadAllStates(). The scanner looks up hook state
-// by pane_id first; if not found, falls back to cwd.
+// by pane_id first; if not found, falls back to the pane's own directory.
 func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[string]models.SessionState) []models.Session {
 	rawSessions := RunTmux("list-sessions", "-F", "#{session_name}:#{session_id}:#{session_path}")
 	sessions := ParseSessions(rawSessions)
 
-	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}")
+	rawPanes := RunTmux("list-panes", "-a", "-F", "#{session_name}:#{window_index}:#{pane_index}:#{pane_current_command}:#{pane_pid}:#{window_name}:#{pane_id}:#{pane_current_path}")
 	allPanes := ParseAllPanes(rawPanes)
 
 	var result []models.Session
+	repos := make(map[string]git.Repo) // one git call per unique directory per scan
+	describe := func(dir string) git.Repo {
+		if r, ok := repos[dir]; ok {
+			return r
+		}
+		r := git.Describe(dir)
+		repos[dir] = r
+		return r
+	}
+
 	for _, sess := range sessions {
 		panes, ok := allPanes[sess.Name]
 		if !ok {
 			continue
 		}
-		displayNames := ComputeDisplayNames(sess.Name, panes)
+
+		// A pane may sit in a worktree, so resolve its own directory before
+		// naming it or looking up its state.
+		panePaths := make(map[string]string, len(panes))
+		worktreeOf := make(map[string]string, len(panes))
 		for _, pane := range panes {
+			path := pane.Path
+			if path == "" {
+				path = sess.Path
+			}
+			panePaths[pane.PaneID] = path
+			if wt := describe(path).Worktree; wt != "" {
+				worktreeOf[pane.PaneID] = wt
+			}
+		}
+
+		displayNames := ComputeDisplayNames(sess.Name, panes, worktreeOf)
+		for _, pane := range panes {
+			path := panePaths[pane.PaneID]
+
 			var hookState models.SessionState
 			var hasHook bool
 			if pane.PaneID != "" {
 				hookState, hasHook = paneStates[pane.PaneID]
 			}
 			if !hasHook {
-				hookState, hasHook = cwdStates[sess.Path]
+				hookState, hasHook = cwdStates[path]
 			}
 
 			var status models.SessionStatus
@@ -263,14 +311,18 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 				status = models.StatusIdle
 			}
 
-			// Get git branch from working directory
-			details.GitBranch = gitBranch(sess.Path)
+			// Git facts come from the pane's own directory, which for a
+			// worktree pane is not the tmux session directory.
+			repo := describe(path)
+			details.GitBranch = repo.Branch
+			details.Worktree = repo.Worktree
+			details.RepoName = repo.RepoName
 
 			result = append(result, models.Session{
 				Name:        displayNames[pane.PaneID],
 				SessionID:   sess.SessionID,
 				SessionName: sess.Name,
-				Path:        sess.Path,
+				Path:        path,
 				WindowIndex: pane.WindowIndex,
 				PaneIndex:   pane.PaneIndex,
 				PaneID:      pane.PaneID,

@@ -9,11 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/config"
+	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/session"
@@ -85,6 +87,14 @@ type Model struct {
 	registry      *state.Registry
 	renameMode    bool
 	renameSession models.Session
+	worktreeMode  bool
+	worktreeOn    models.Session
+	confirmMode   bool
+	confirmOn     models.Session
+	pending       *pendingWorktree // worktree being created, nil when idle
+	spinner       spinner.Model
+	statusErr     string              // last failure, shown until the next keypress
+	workCache     map[string]git.Work // outstanding work per path, refreshed each scan
 	result        Result
 	promptMode    bool
 	promptTarget  models.Session
@@ -117,6 +127,8 @@ func New() Model {
 		showHelpBar: cfg.Picker.ShowHelpBar,
 		registry:    state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput: pi,
+		workCache:   make(map[string]git.Work),
+		spinner:     newSpinner(),
 	}
 }
 
@@ -200,8 +212,43 @@ func (m *Model) applyGridOrder(visible []models.Session) {
 	m.gridOrder = order
 }
 
-// isStarred returns whether a session is starred in the registry.
+// workFor returns outstanding git work for a session, computed at most once per
+// scan per path. It is only consulted for worktree panes and only for the
+// selected session, because the detail pane re-renders every frame for the
+// status-dot pulse and git must not be called from there.
+// The receiver is a value, but workCache is a map created in New() and replaced
+// (never nilled) on each scan, so entries written here persist into the real
+// model rather than dying with a copy — which is what keeps git off the render
+// path after the first lookup.
+func (m Model) workFor(s models.Session) git.Work {
+	if s.Path == "" || m.workCache == nil {
+		return git.Work{}
+	}
+	if w, ok := m.workCache[s.Path]; ok {
+		return w
+	}
+	w := git.WorkStatus(s.Path)
+	m.workCache[s.Path] = w
+	return w
+}
+
+// query returns the active search text. Rename and new-worktree modes borrow the
+// same input field for typing a name, so the text is not a search query then —
+// without this the list filters itself down as you type a worktree name.
+func (m Model) query() string {
+	if m.renameMode || m.worktreeMode || m.confirmMode {
+		return ""
+	}
+	return m.searchInput.Value()
+}
+
+// isStarred returns whether a session is starred in the registry. A Model
+// without a registry has no stars rather than panicking, which keeps sorting
+// testable in isolation.
 func (m Model) isStarred(name string) bool {
+	if m.registry == nil {
+		return false
+	}
 	s := m.registry.Find(name)
 	return s != nil && s.Starred
 }
@@ -237,8 +284,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case spinner.TickMsg:
+		if m.pending == nil {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		// Give up rather than spin forever if the pane never arrives.
+		if m.pending.expired(time.Now()) {
+			log.Info("worktree %q: agent pane never appeared", m.pending.name)
+			m.statusErr = fmt.Sprintf("worktree %q created, but its agent never started", m.pending.name)
+			m.pending = nil
+			return m, nil
+		}
+		return m, cmd
+
+	case worktreeCreatedMsg:
+		if msg.err != nil {
+			log.Info("worktree %q failed: %v", msg.name, msg.err)
+			m.statusErr = msg.err.Error()
+			m.pending = nil
+			return m, nil
+		}
+		log.Info("created worktree %s", msg.name)
+		// Keep waiting: the agent still has to start before the pane exists.
+		return m, doScan(m.statesDir)
+
 	case SessionsUpdatedMsg:
 		m.sessions = []models.Session(msg)
+		if m.pending != nil && m.pending.satisfiedBy(m.sessions) {
+			log.Info("worktree %q is live", m.pending.name)
+			m.pending = nil
+		}
+		m.workCache = make(map[string]git.Work) // recompute work against the new scan
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
@@ -359,6 +437,10 @@ func (m Model) view() string {
 		overlay := m.renderPromptOverlay()
 		return placeOverlay(m.width, m.height, overlay, base)
 	}
+	if m.confirmMode {
+		overlay := m.renderConfirmOverlay()
+		return placeOverlay(m.width, m.height, overlay, base)
+	}
 
 	return base
 }
@@ -374,11 +456,41 @@ func (m Model) renderPromptOverlay() string {
 	return dialogStyle().Padding(1, 2).Render(content)
 }
 
+// renderConfirmOverlay renders the worktree removal dialog. It reports the
+// worktree's outstanding work, because git refuses to remove a dirty worktree —
+// better to say so before the keypress than to fail after it.
+func (m Model) renderConfirmOverlay() string {
+	c := theme.Current().Colors
+	s := m.confirmOn
+
+	title := lipgloss.NewStyle().Foreground(c.Warning).Bold(true).
+		Render("Remove worktree")
+	name := lipgloss.NewStyle().Foreground(c.Foreground).Bold(true).Render(s.Details.Worktree)
+	path := lipgloss.NewStyle().Foreground(c.Muted).Render(s.Path)
+
+	work := m.workFor(s)
+	var state string
+	if work.Dirty > 0 {
+		state = lipgloss.NewStyle().Foreground(c.Warning).
+			Render(fmt.Sprintf("%d uncommitted change(s) — removal will be refused", work.Dirty))
+	} else {
+		state = lipgloss.NewStyle().Foreground(c.Muted).
+			Render("clean — the branch is kept, only the directory goes")
+	}
+
+	hint := lipgloss.NewStyle().Foreground(c.Muted).Render("y  delete      n / esc  keep")
+	content := title + "\n\n" + name + "\n" + path + "\n\n" + state + "\n\n" + hint
+	return dialogStyle().Padding(1, 2).Render(content)
+}
+
 // --- Key handling ---
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	log.Debug("key: %q", key)
+
+	// Any keystroke acknowledges the last failure.
+	m.statusErr = ""
 
 	// Theme picker intercepts all keys when open
 	if m.showThemePick {
@@ -388,6 +500,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Rename mode intercepts keys before normal handling
 	if m.renameMode {
 		return m.handleRenameKey(msg)
+	}
+
+	// Worktree-name entry intercepts keys the same way
+	if m.worktreeMode {
+		return m.handleWorktreeKey(msg)
+	}
+
+	// A pending confirmation swallows everything until answered
+	if m.confirmMode {
+		return m.handleConfirmKey(msg)
 	}
 
 	// Prompt mode intercepts keys
@@ -510,8 +632,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyKillSession:
 		if s, ok := m.selectedSession(); ok {
 			markDead(s, m.statesDir)
-			tmux.RunTmux("kill-session", "-t", s.SessionName)
-			log.Info("killed session %s", s.Name)
+			// Kill only this window when the session holds sibling agent panes,
+			// or a repo's other worktrees would go down with it.
+			if target, isWindow := killTarget(s, m.sessions); isWindow {
+				tmux.RunTmux("kill-window", "-t", target)
+				log.Info("killed window %s (%s)", target, s.Name)
+			} else {
+				tmux.RunTmux("kill-session", "-t", target)
+				log.Info("killed session %s", s.Name)
+			}
+			// A worktree outlives its pane, so offer to remove it too.
+			if s.Details.Worktree != "" {
+				m.confirmMode = true
+				m.confirmOn = s
+				return m, doScan(m.statesDir)
+			}
 			return m, doScan(m.statesDir)
 		}
 		return m, nil
@@ -558,6 +693,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.CursorEnd()
 		}
 		return m, nil
+	case keyNewWorktree:
+		if s, ok := m.selectedSession(); ok {
+			m.worktreeMode = true
+			m.worktreeOn = s
+			m.searchInput.SetValue("")
+		}
+		return m, nil
 	case keyNewSession:
 		m.result = Result{Action: ActionNew}
 		return m, tea.Quit
@@ -589,6 +731,62 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// handleConfirmKey answers the pending worktree-removal confirmation. Anything
+// other than an explicit yes declines, since the action deletes a directory.
+func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		// fall through to removal below
+	case "n", "N", keyEscape, keyEnter:
+		m.confirmMode = false
+		log.Info("kept worktree %s", m.confirmOn.Details.Worktree)
+		return m, nil
+	default:
+		// Ignore unrelated keys rather than treating them as an answer: a
+		// stray keystroke used to dismiss this silently.
+		return m, nil
+	}
+	m.confirmMode = false
+	// git refuses while the worktree holds uncommitted work, so a mistaken yes
+	// cannot destroy unsaved changes.
+	if err := git.RemoveWorktree(m.confirmOn.Path); err != nil {
+		log.Info("could not remove worktree %s: %v", m.confirmOn.Details.Worktree, err)
+		return m, nil
+	}
+	log.Info("removed worktree %s", m.confirmOn.Details.Worktree)
+	return m, doScan(m.statesDir)
+}
+
+// handleWorktreeKey handles key input while naming a new worktree. The name is
+// typed into the search input, the same field rename mode borrows.
+func (m Model) handleWorktreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case keyEscape:
+		m.worktreeMode = false
+		m.searchInput.SetValue("")
+		return m, nil
+	case keyEnter:
+		name := strings.TrimSpace(m.searchInput.Value())
+		m.worktreeMode = false
+		m.searchInput.SetValue("")
+		if name == "" {
+			return m, nil
+		}
+		// The agent inherits from the session the worktree is spawned off, so
+		// a repo full of Claude panes keeps getting Claude panes.
+		m.pending = &pendingWorktree{name: name, deadline: time.Now().Add(worktreeWait)}
+		m.statusErr = ""
+		return m, tea.Batch(
+			m.spinner.Tick,
+			createWorktreeCmd(m.worktreeOn.Path, name, string(m.worktreeOn.AgentType)),
+		)
+	default:
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
 }
 
 // handleRenameKey handles key input during rename mode.
@@ -852,7 +1050,7 @@ func (m *Model) applyFilter() {
 		}
 	}
 
-	query := m.searchInput.Value()
+	query := m.query()
 	queryChanged := query != m.lastQuery
 	m.lastQuery = query
 
@@ -901,6 +1099,14 @@ func (m *Model) applyFilter() {
 	}
 }
 
+// sortFiltered orders m.filtered into the order it is displayed in. Sessions
+// sharing a tmux session name are kept contiguous so the list view can put a
+// single header above them, and each group takes the position of its most
+// urgent member — a waiting worktree lifts its whole repo rather than being
+// buried inside a quiet group.
+//
+// A lone session is a group of one and is its own representative, so a list
+// with nothing to group sorts exactly as a flat list always did.
 func (m *Model) sortFiltered() {
 	// Pre-build starred set to avoid per-comparison registry lookups
 	starred := make(map[string]bool)
@@ -908,21 +1114,71 @@ func (m *Model) sortFiltered() {
 		starred[s.Name] = m.isStarred(s.Name)
 	}
 
-	sort.SliceStable(m.filtered, func(i, j int) bool {
-		si := starred[m.filtered[i].Name]
-		sj := starred[m.filtered[j].Name]
-		if si != sj {
-			return si
+	// less is the comparator the flat list has always used: stars first, then
+	// the active sort mode.
+	less := func(a, b models.Session) bool {
+		if sa, sb := starred[a.Name], starred[b.Name]; sa != sb {
+			return sa
 		}
 		switch m.sortMode {
 		case SortByName:
-			return m.filtered[i].Name < m.filtered[j].Name
+			return a.Name < b.Name
 		case SortByAgent:
-			return m.filtered[i].AgentType < m.filtered[j].AgentType
+			return a.AgentType < b.AgentType
 		default: // SortByStatus
-			return statusOrder(m.filtered[i].Status) < statusOrder(m.filtered[j].Status)
+			return statusOrder(a.Status) < statusOrder(b.Status)
 		}
+	}
+
+	// Urgency is independent of the active sort mode: a waiting child has to
+	// lift its group even when sorting by name.
+	moreUrgent := func(a, b models.Session) bool {
+		if sa, sb := starred[a.Name], starred[b.Name]; sa != sb {
+			return sa
+		}
+		return statusOrder(a.Status) < statusOrder(b.Status)
+	}
+
+	var keys []string
+	groups := make(map[string][]models.Session)
+	for _, s := range m.filtered {
+		key := groupKeyOf(s)
+		if _, seen := groups[key]; !seen {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], s)
+	}
+
+	reps := make(map[string]models.Session, len(groups))
+	for key, members := range groups {
+		sort.SliceStable(members, func(i, j int) bool { return less(members[i], members[j]) })
+		groups[key] = members
+
+		rep := members[0]
+		for _, s := range members[1:] {
+			if moreUrgent(s, rep) {
+				rep = s
+			}
+		}
+		reps[key] = rep
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		a, b := reps[keys[i]], reps[keys[j]]
+		if less(a, b) {
+			return true
+		}
+		if less(b, a) {
+			return false
+		}
+		return keys[i] < keys[j] // stable tie-break so the list never jitters
 	})
+
+	ordered := make([]models.Session, 0, len(m.filtered))
+	for _, key := range keys {
+		ordered = append(ordered, groups[key]...)
+	}
+	m.filtered = ordered
 }
 
 func statusOrder(s models.SessionStatus) int {
@@ -1008,10 +1264,12 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	// Search input (always active)
 	if m.renameMode {
 		m.searchInput.Prompt = " Rename: "
+	} else if m.worktreeMode {
+		m.searchInput.Prompt = " New worktree: "
 	} else {
 		m.searchInput.Prompt = " > "
 	}
-	b.WriteString(m.searchInput.View())
+	b.WriteString(m.statusLine())
 	b.WriteString("\n\n")
 
 	// Session list.
@@ -1044,19 +1302,37 @@ func (m Model) renderListView(width, height int) string {
 		return mutedStyle().Render("  No sessions found")
 	}
 
+	// Rows carry group headers alongside sessions, so scrolling works in row
+	// space while the cursor keeps indexing sessions.
+	rows := buildRows(m.filtered)
+	cursorRow := 0
+	for i, r := range rows {
+		if r.SessionIdx == m.cursor {
+			cursorRow = i
+			break
+		}
+	}
+
 	start := 0
-	if m.cursor >= height {
-		start = m.cursor - height + 1
+	if cursorRow >= height {
+		start = cursorRow - height + 1
 	}
 	end := start + height
-	if end > len(m.filtered) {
-		end = len(m.filtered)
+	if end > len(rows) {
+		end = len(rows)
 	}
 
 	c := theme.Current().Colors
 
 	var lines []string
-	for i := start; i < end; i++ {
+	for ri := start; ri < end; ri++ {
+		row := rows[ri]
+		if row.SessionIdx < 0 {
+			lines = append(lines, m.renderGroupHeader(row, width))
+			continue
+		}
+
+		i := row.SessionIdx
 		s := m.filtered[i]
 		dot := statusDot(s.Status, m.pulseOn)
 		badge := lipgloss.NewStyle().
@@ -1079,15 +1355,22 @@ func (m Model) renderListView(width, height int) string {
 		// cluster ahead of the badge so a starred row does not shunt its
 		// badge out of the shared column.
 		right := starStyled + badge
+		// A grouped child is indented under its header and shows only its own
+		// name — the repo is on the header, so the prefix is not repeated.
+		prefix := ""
+		if row.Glyph != "" {
+			prefix = row.Glyph + " "
+		}
 		// Columns the row spends on anything that is not the name: leading
-		// space, the dot, the space after it, the right cluster, at least one
-		// space separating name from badge, and a trailing gutter column.
-		fixed := 1 + lipgloss.Width(dot) + 1 + 1 + lipgloss.Width(right) + rowGutter
+		// space, the dot, the space after it, the tree prefix, the right
+		// cluster, at least one space separating name from badge, and a
+		// trailing gutter column.
+		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) + 1 + lipgloss.Width(right) + rowGutter
 		maxName := width - fixed
 		if maxName < minNameWidth {
 			maxName = minNameWidth
 		}
-		name := truncate(s.Name, maxName)
+		name := truncate(row.Label, maxName)
 
 		// Selection: tint the row background (crush / lazygit / gh-dash
 		// convention) — no caret or gutter rune. Bold the text for an
@@ -1099,13 +1382,17 @@ func (m Model) renderListView(width, height int) string {
 			rowBg = c.SelBg
 			nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
 		}
-		nameStyled := renderNameWithMatches(name, s.Name, m.searchInput.Value(), nameStyle, c.Accent)
+		// Highlight matches against the label actually shown: a query that only
+		// hit the repo portion has nothing to mark on the child, and the header
+		// above carries that text.
+		nameStyled := renderNameWithMatches(name, row.Label, m.query(), nameStyle, c.Accent)
+		prefixStyled := mutedStyle().Render(prefix)
 
-		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
+		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
 		if gap < 1 {
 			gap = 1
 		}
-		content := fmt.Sprintf(" %s %s%s%s", dot, nameStyled, strings.Repeat(" ", gap), right)
+		content := fmt.Sprintf(" %s %s%s%s%s", dot, prefixStyled, nameStyled, strings.Repeat(" ", gap), right)
 		line := lipgloss.NewStyle().
 			Background(rowBg).
 			Width(width).
@@ -1113,6 +1400,31 @@ func (m Model) renderListView(width, height int) string {
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderGroupHeader renders the repo line above a group of sessions. It carries
+// no status dot and no agent badge — those belong to the sessions underneath —
+// just the repo name and how many sessions it holds.
+func (m Model) renderGroupHeader(row listRow, width int) string {
+	c := theme.Current().Colors
+
+	count := mutedStyle().Render(fmt.Sprintf("%d sessions", row.Count))
+	fixed := 1 + 1 + lipgloss.Width(count) + rowGutter
+	maxName := width - fixed
+	if maxName < minNameWidth {
+		maxName = minNameWidth
+	}
+	name := lipgloss.NewStyle().
+		Foreground(c.Secondary).
+		Bold(true).
+		Render(truncate(row.Group, maxName))
+
+	gap := width - 1 - lipgloss.Width(name) - lipgloss.Width(count) - rowGutter
+	if gap < 1 {
+		gap = 1
+	}
+	content := fmt.Sprintf(" %s%s%s", name, strings.Repeat(" ", gap), count)
+	return lipgloss.NewStyle().Background(c.Background).Width(width).Render(content)
 }
 
 func (m Model) renderGridView(width, height int) string {
@@ -1150,7 +1462,7 @@ func (m Model) renderGridView(width, height int) string {
 				cellBg = c.SelBg
 				nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
 			}
-			nameStyled := renderNameWithMatches(name, s.Name, m.searchInput.Value(), nameStyle, c.Accent)
+			nameStyled := renderNameWithMatches(name, s.Name, m.query(), nameStyle, c.Accent)
 			content := fmt.Sprintf(" %s %s", dot, nameStyled)
 			cell := lipgloss.NewStyle().
 				Background(cellBg).
@@ -1194,6 +1506,28 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 
 	if s.Details.GitBranch != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))
+	}
+	// Name the repo a worktree belongs to — the display name only carries the
+	// worktree, so without this a worktree pane never says what it forked from.
+	if s.Details.RepoName != "" && s.Details.Worktree != "" {
+		repo := fmt.Sprintf("%s (worktree %s)", s.Details.RepoName, s.Details.Worktree)
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Repo  "), val.Render(repo)))
+
+		w := m.workFor(s)
+		state := "clean"
+		if w.Dirty > 0 {
+			state = fmt.Sprintf("%d uncommitted", w.Dirty)
+		}
+		if w.HasUpstream && w.Ahead > 0 {
+			state += fmt.Sprintf(" · %d ahead", w.Ahead)
+		}
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Work  "), val.Render(state)))
+	}
+	// Two agents in one working tree will overwrite each other's edits.
+	if n := sharedPaths(m.sessions)[s.Path]; n > 1 {
+		warn := lipgloss.NewStyle().Foreground(theme.Current().Colors.Warning)
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Shared"),
+			warn.Render(fmt.Sprintf("%d agents in this directory", n))))
 	}
 	if s.Details.LastActivity != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))

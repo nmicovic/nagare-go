@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
@@ -95,6 +96,22 @@ func main() {
 			agent, _ := cmd.Flags().GetString("agent")
 			name, _ := cmd.Flags().GetString("name")
 			cont, _ := cmd.Flags().GetBool("continue")
+			worktree, _ := cmd.Flags().GetString("worktree")
+
+			if worktree != "" {
+				if name != "" {
+					return fmt.Errorf("--worktree and --name mean different names; pass only one")
+				}
+				if len(args) == 0 {
+					return fmt.Errorf("--worktree needs a repository path: nagare-go new <repo> -w %s", worktree)
+				}
+				sessionName, err := session.CreateWorktree(args[0], worktree, agent)
+				if err != nil {
+					return err
+				}
+				session.SwitchToSession(sessionName)
+				return nil
+			}
 
 			if len(args) == 0 {
 				// No path: launch interactive form
@@ -112,9 +129,10 @@ func main() {
 			return nil
 		},
 	}
-	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, opencode, gemini, pi)")
+	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, opencode, gemini, crush, pi)")
 	newCmd.Flags().StringP("name", "n", "", "Session name (default: path basename)")
 	newCmd.Flags().BoolP("continue", "c", true, "Continue previous session")
+	newCmd.Flags().StringP("worktree", "w", "", "Create a named git worktree and start the agent in it")
 
 	notifsCmd := &cobra.Command{
 		Use:   "notifs",

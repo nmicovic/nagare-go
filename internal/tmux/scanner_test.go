@@ -80,7 +80,7 @@ func TestComputeDisplayNames(t *testing.T) {
 		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "terminal", PaneID: "%2"},
 		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "? claude", PaneID: "%1"},
 	}
-	got := ComputeDisplayNames(sess, panes)
+	got := ComputeDisplayNames(sess, panes, nil)
 	if got["%1"] != "cosmo-ai/claude_01" {
 		t.Errorf("pane %%1 = %q, want cosmo-ai/claude_01", got["%1"])
 	}
@@ -92,7 +92,7 @@ func TestComputeDisplayNames(t *testing.T) {
 func TestComputeDisplayNamesSinglePane(t *testing.T) {
 	got := ComputeDisplayNames("work", []PaneInfo{
 		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "zsh", PaneID: "%3"},
-	})
+	}, nil)
 	if got["%3"] != "work" {
 		t.Errorf("single pane name = %q, want work", got["%3"])
 	}
@@ -103,7 +103,7 @@ func TestComputeDisplayNamesCustomWindowName(t *testing.T) {
 		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "? claude", PaneID: "%1"},
 		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "planning", PaneID: "%2"},
 	}
-	got := ComputeDisplayNames("cosmo-ai", panes)
+	got := ComputeDisplayNames("cosmo-ai", panes, nil)
 	if got["%1"] != "cosmo-ai/claude_01" {
 		t.Errorf("pane %%1 = %q", got["%1"])
 	}
@@ -117,7 +117,7 @@ func TestComputeDisplayNamesMixedAgents(t *testing.T) {
 		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "zsh", PaneID: "%1"},
 		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentGemini, WindowName: "zsh", PaneID: "%2"},
 	}
-	got := ComputeDisplayNames("proj", panes)
+	got := ComputeDisplayNames("proj", panes, nil)
 	if got["%1"] != "proj/claude_01" {
 		t.Errorf("pane %%1 = %q", got["%1"])
 	}
@@ -162,5 +162,58 @@ func TestParseAllPanesWithoutPanePath(t *testing.T) {
 	}
 	if got := panes["proj"][0].Path; got != "" {
 		t.Errorf("Path = %q, want empty", got)
+	}
+}
+
+func TestComputeDisplayNamesWorktrees(t *testing.T) {
+	panes := []PaneInfo{
+		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "? claude", PaneID: "%2"},
+		{WindowIndex: 1, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "terminal", PaneID: "%12"},
+	}
+	worktreeOf := map[string]string{"%2": "fluttering-watching-gadget", "%12": "the-site"}
+
+	got := ComputeDisplayNames("cosmic-platform-frontend", panes, worktreeOf)
+
+	if got["%2"] != "cosmic-platform-frontend/fluttering-watching-gadget" {
+		t.Errorf("%%2 = %q", got["%2"])
+	}
+	if got["%12"] != "cosmic-platform-frontend/the-site" {
+		t.Errorf("%%12 = %q", got["%12"])
+	}
+}
+
+// A lone pane in a worktree is still worth naming after the worktree.
+func TestComputeDisplayNamesSinglePaneInWorktree(t *testing.T) {
+	panes := []PaneInfo{{AgentType: models.AgentClaude, PaneID: "%5"}}
+	got := ComputeDisplayNames("app", panes, map[string]string{"%5": "the-site"})
+	if got["%5"] != "app/the-site" {
+		t.Errorf("got %q, want %q", got["%5"], "app/the-site")
+	}
+}
+
+// An explicitly named window is the user's own labelling and still wins.
+func TestComputeDisplayNamesWindowNameBeatsWorktree(t *testing.T) {
+	panes := []PaneInfo{
+		{WindowIndex: 0, AgentType: models.AgentClaude, WindowName: "review", PaneID: "%1"},
+		{WindowIndex: 1, AgentType: models.AgentClaude, WindowName: "terminal", PaneID: "%2"},
+	}
+	got := ComputeDisplayNames("app", panes, map[string]string{"%1": "wt-a", "%2": "wt-b"})
+	if got["%1"] != "app/review" {
+		t.Errorf("%%1 = %q, want app/review", got["%1"])
+	}
+	if got["%2"] != "app/wt-b" {
+		t.Errorf("%%2 = %q, want app/wt-b", got["%2"])
+	}
+}
+
+// Two panes in one worktree must stay distinguishable.
+func TestComputeDisplayNamesSameWorktreeTwice(t *testing.T) {
+	panes := []PaneInfo{
+		{WindowIndex: 0, AgentType: models.AgentClaude, WindowName: "terminal", PaneID: "%1"},
+		{WindowIndex: 1, AgentType: models.AgentClaude, WindowName: "terminal", PaneID: "%2"},
+	}
+	got := ComputeDisplayNames("app", panes, map[string]string{"%1": "the-site", "%2": "the-site"})
+	if got["%1"] == got["%2"] {
+		t.Errorf("both panes got the same name %q", got["%1"])
 	}
 }

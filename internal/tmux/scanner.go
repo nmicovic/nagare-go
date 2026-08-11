@@ -173,13 +173,15 @@ func isCustomWindowName(windowName, sessionName string) bool {
 }
 
 // ComputeDisplayNames returns a map from pane_id to display name for a set of
-// agent panes sharing a tmux session. When there's only one pane, the bare
-// session name is used. When multiple panes share the session, panes with a
-// custom window name use "{sessName}/{windowName}" and the rest get
-// "{sessName}/{agent}_NN" (1-based, per agent type, ordered by window/pane).
-func ComputeDisplayNames(sessName string, panes []PaneInfo) map[string]string {
+// agent panes sharing a tmux session. worktreeOf maps pane_id to a worktree
+// basename for panes sitting in a linked worktree, and may be nil.
+//
+// Name precedence, highest first: a window name the user set, the worktree the
+// pane sits in, then "{agent}_NN" (1-based, per agent type, ordered by
+// window/pane). A single pane outside a worktree keeps the bare session name.
+func ComputeDisplayNames(sessName string, panes []PaneInfo, worktreeOf map[string]string) map[string]string {
 	result := make(map[string]string, len(panes))
-	if len(panes) == 1 {
+	if len(panes) == 1 && worktreeOf[panes[0].PaneID] == "" {
 		result[panes[0].PaneID] = sessName
 		return result
 	}
@@ -193,14 +195,36 @@ func ComputeDisplayNames(sessName string, panes []PaneInfo) map[string]string {
 		return sorted[i].PaneIndex < sorted[j].PaneIndex
 	})
 
+	// labelFor returns the pane's preferred name fragment, or "" when it has
+	// none and must fall back to the numbered form.
+	labelFor := func(p PaneInfo) string {
+		if isCustomWindowName(p.WindowName, sessName) {
+			return p.WindowName
+		}
+		return worktreeOf[p.PaneID]
+	}
+
+	// Count labels first so the numbered fallback only applies where a label
+	// is actually shared by more than one pane.
+	taken := make(map[string]int)
+	for _, p := range sorted {
+		if label := labelFor(p); label != "" {
+			taken[label]++
+		}
+	}
+
 	counts := make(map[models.AgentType]int)
 	for _, p := range sorted {
-		if isCustomWindowName(p.WindowName, sessName) {
-			result[p.PaneID] = sessName + "/" + p.WindowName
+		label := labelFor(p)
+		if label != "" && taken[label] == 1 {
+			result[p.PaneID] = sessName + "/" + label
 			continue
 		}
 		counts[p.AgentType]++
-		result[p.PaneID] = fmt.Sprintf("%s/%s_%02d", sessName, p.AgentType, counts[p.AgentType])
+		if label == "" {
+			label = string(p.AgentType)
+		}
+		result[p.PaneID] = fmt.Sprintf("%s/%s_%02d", sessName, label, counts[p.AgentType])
 	}
 	return result
 }
@@ -240,7 +264,7 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 		if !ok {
 			continue
 		}
-		displayNames := ComputeDisplayNames(sess.Name, panes)
+		displayNames := ComputeDisplayNames(sess.Name, panes, nil)
 		for _, pane := range panes {
 			var hookState models.SessionState
 			var hasHook bool

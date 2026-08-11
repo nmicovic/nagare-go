@@ -1107,19 +1107,37 @@ func (m Model) renderListView(width, height int) string {
 		return mutedStyle().Render("  No sessions found")
 	}
 
+	// Rows carry group headers alongside sessions, so scrolling works in row
+	// space while the cursor keeps indexing sessions.
+	rows := buildRows(m.filtered)
+	cursorRow := 0
+	for i, r := range rows {
+		if r.SessionIdx == m.cursor {
+			cursorRow = i
+			break
+		}
+	}
+
 	start := 0
-	if m.cursor >= height {
-		start = m.cursor - height + 1
+	if cursorRow >= height {
+		start = cursorRow - height + 1
 	}
 	end := start + height
-	if end > len(m.filtered) {
-		end = len(m.filtered)
+	if end > len(rows) {
+		end = len(rows)
 	}
 
 	c := theme.Current().Colors
 
 	var lines []string
-	for i := start; i < end; i++ {
+	for ri := start; ri < end; ri++ {
+		row := rows[ri]
+		if row.SessionIdx < 0 {
+			lines = append(lines, m.renderGroupHeader(row, width))
+			continue
+		}
+
+		i := row.SessionIdx
 		s := m.filtered[i]
 		dot := statusDot(s.Status, m.pulseOn)
 		badge := lipgloss.NewStyle().
@@ -1142,15 +1160,22 @@ func (m Model) renderListView(width, height int) string {
 		// cluster ahead of the badge so a starred row does not shunt its
 		// badge out of the shared column.
 		right := starStyled + badge
+		// A grouped child is indented under its header and shows only its own
+		// name — the repo is on the header, so the prefix is not repeated.
+		prefix := ""
+		if row.Glyph != "" {
+			prefix = row.Glyph + " "
+		}
 		// Columns the row spends on anything that is not the name: leading
-		// space, the dot, the space after it, the right cluster, at least one
-		// space separating name from badge, and a trailing gutter column.
-		fixed := 1 + lipgloss.Width(dot) + 1 + 1 + lipgloss.Width(right) + rowGutter
+		// space, the dot, the space after it, the tree prefix, the right
+		// cluster, at least one space separating name from badge, and a
+		// trailing gutter column.
+		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) + 1 + lipgloss.Width(right) + rowGutter
 		maxName := width - fixed
 		if maxName < minNameWidth {
 			maxName = minNameWidth
 		}
-		name := truncate(s.Name, maxName)
+		name := truncate(row.Label, maxName)
 
 		// Selection: tint the row background (crush / lazygit / gh-dash
 		// convention) — no caret or gutter rune. Bold the text for an
@@ -1162,13 +1187,17 @@ func (m Model) renderListView(width, height int) string {
 			rowBg = c.SelBg
 			nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
 		}
-		nameStyled := renderNameWithMatches(name, s.Name, m.searchInput.Value(), nameStyle, c.Accent)
+		// Highlight matches against the label actually shown: a query that only
+		// hit the repo portion has nothing to mark on the child, and the header
+		// above carries that text.
+		nameStyled := renderNameWithMatches(name, row.Label, m.searchInput.Value(), nameStyle, c.Accent)
+		prefixStyled := mutedStyle().Render(prefix)
 
-		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
+		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
 		if gap < 1 {
 			gap = 1
 		}
-		content := fmt.Sprintf(" %s %s%s%s", dot, nameStyled, strings.Repeat(" ", gap), right)
+		content := fmt.Sprintf(" %s %s%s%s%s", dot, prefixStyled, nameStyled, strings.Repeat(" ", gap), right)
 		line := lipgloss.NewStyle().
 			Background(rowBg).
 			Width(width).
@@ -1176,6 +1205,31 @@ func (m Model) renderListView(width, height int) string {
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderGroupHeader renders the repo line above a group of sessions. It carries
+// no status dot and no agent badge — those belong to the sessions underneath —
+// just the repo name and how many sessions it holds.
+func (m Model) renderGroupHeader(row listRow, width int) string {
+	c := theme.Current().Colors
+
+	count := mutedStyle().Render(fmt.Sprintf("%d sessions", row.Count))
+	fixed := 1 + 1 + lipgloss.Width(count) + rowGutter
+	maxName := width - fixed
+	if maxName < minNameWidth {
+		maxName = minNameWidth
+	}
+	name := lipgloss.NewStyle().
+		Foreground(c.Secondary).
+		Bold(true).
+		Render(truncate(row.Group, maxName))
+
+	gap := width - 1 - lipgloss.Width(name) - lipgloss.Width(count) - rowGutter
+	if gap < 1 {
+		gap = 1
+	}
+	content := fmt.Sprintf(" %s%s%s", name, strings.Repeat(" ", gap), count)
+	return lipgloss.NewStyle().Background(c.Background).Width(width).Render(content)
 }
 
 func (m Model) renderGridView(width, height int) string {

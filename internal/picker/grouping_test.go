@@ -1,8 +1,10 @@
 package picker
 
 import (
+	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/nemke/nagare-go/internal/models"
 )
 
@@ -256,6 +258,40 @@ func TestSortFilteredSingletonRegression(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
+
+// The complaint that motivated grouping: at the observed pane width the full
+// name "cosmic-platform-frontend/fluttering-watching-gadget" (51 chars) was
+// truncated to "cosmic-platform-frontend/flutter…", hiding the only part that
+// identifies the pane. Grouped, the label alone must fit.
+func TestRenderListViewFitsWorktreeNames(t *testing.T) {
+	const width = 46
+
+	m := Model{sortMode: SortByStatus}
+	m.filtered = []models.Session{
+		wt("cosmic-platform-frontend", "shipping", models.StatusWaitingInput),
+		wt("cosmic-platform-frontend", "fluttering-watching-gadget", models.StatusIdle),
+		wt("cosmic-platform-frontend", "the-site", models.StatusRunning),
+	}
+	m.sortFiltered()
+
+	out := m.renderListView(width, 10)
+
+	for _, label := range []string{"shipping", "fluttering-watching-gadget", "the-site"} {
+		if !strings.Contains(out, label) {
+			t.Errorf("rendered list is missing %q in full:\n%s", label, out)
+		}
+	}
+	// The repo is named once on the header, not on every row.
+	if n := strings.Count(out, "cosmic-platform-frontend"); n != 1 {
+		t.Errorf("repo name appears %d times, want 1 (on the header):\n%s", n, out)
+	}
+	// Every rendered line must respect the pane width.
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line is %d cells wide, want <= %d: %q", w, width, line)
 		}
 	}
 }

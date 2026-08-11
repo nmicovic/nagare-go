@@ -3,11 +3,11 @@ package tmux
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/models"
 )
 
@@ -229,16 +229,6 @@ func ComputeDisplayNames(sessName string, panes []PaneInfo, worktreeOf map[strin
 	return result
 }
 
-// gitBranch returns the current git branch for a directory, or "".
-func gitBranch(dir string) string {
-	cmd := exec.Command("git", "-C", dir, "branch", "--show-current")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // hookStateMap maps hook state strings to SessionStatus.
 var hookStateMap = map[string]models.SessionStatus{
 	"working":       models.StatusRunning,
@@ -250,7 +240,7 @@ var hookStateMap = map[string]models.SessionStatus{
 // ScanSessions discovers all agent sessions in tmux.
 // paneStates should be pre-loaded via state.LoadStatesByPaneID() and
 // cwdStates via state.LoadAllStates(). The scanner looks up hook state
-// by pane_id first; if not found, falls back to cwd.
+// by pane_id first; if not found, falls back to the pane's own directory.
 func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[string]models.SessionState) []models.Session {
 	rawSessions := RunTmux("list-sessions", "-F", "#{session_name}:#{session_id}:#{session_path}")
 	sessions := ParseSessions(rawSessions)
@@ -259,20 +249,48 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 	allPanes := ParseAllPanes(rawPanes)
 
 	var result []models.Session
+	repos := make(map[string]git.Repo) // one git call per unique directory per scan
+	describe := func(dir string) git.Repo {
+		if r, ok := repos[dir]; ok {
+			return r
+		}
+		r := git.Describe(dir)
+		repos[dir] = r
+		return r
+	}
+
 	for _, sess := range sessions {
 		panes, ok := allPanes[sess.Name]
 		if !ok {
 			continue
 		}
-		displayNames := ComputeDisplayNames(sess.Name, panes, nil)
+
+		// A pane may sit in a worktree, so resolve its own directory before
+		// naming it or looking up its state.
+		panePaths := make(map[string]string, len(panes))
+		worktreeOf := make(map[string]string, len(panes))
 		for _, pane := range panes {
+			path := pane.Path
+			if path == "" {
+				path = sess.Path
+			}
+			panePaths[pane.PaneID] = path
+			if wt := describe(path).Worktree; wt != "" {
+				worktreeOf[pane.PaneID] = wt
+			}
+		}
+
+		displayNames := ComputeDisplayNames(sess.Name, panes, worktreeOf)
+		for _, pane := range panes {
+			path := panePaths[pane.PaneID]
+
 			var hookState models.SessionState
 			var hasHook bool
 			if pane.PaneID != "" {
 				hookState, hasHook = paneStates[pane.PaneID]
 			}
 			if !hasHook {
-				hookState, hasHook = cwdStates[sess.Path]
+				hookState, hasHook = cwdStates[path]
 			}
 
 			var status models.SessionStatus
@@ -293,14 +311,18 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 				status = models.StatusIdle
 			}
 
-			// Get git branch from working directory
-			details.GitBranch = gitBranch(sess.Path)
+			// Git facts come from the pane's own directory, which for a
+			// worktree pane is not the tmux session directory.
+			repo := describe(path)
+			details.GitBranch = repo.Branch
+			details.Worktree = repo.Worktree
+			details.RepoName = repo.RepoName
 
 			result = append(result, models.Session{
 				Name:        displayNames[pane.PaneID],
 				SessionID:   sess.SessionID,
 				SessionName: sess.Name,
-				Path:        sess.Path,
+				Path:        path,
 				WindowIndex: pane.WindowIndex,
 				PaneIndex:   pane.PaneIndex,
 				PaneID:      pane.PaneID,

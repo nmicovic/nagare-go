@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -90,6 +91,9 @@ type Model struct {
 	worktreeOn    models.Session
 	confirmMode   bool
 	confirmOn     models.Session
+	pending       *pendingWorktree // worktree being created, nil when idle
+	spinner       spinner.Model
+	statusErr     string              // last failure, shown until the next keypress
 	workCache     map[string]git.Work // outstanding work per path, refreshed each scan
 	result        Result
 	promptMode    bool
@@ -124,6 +128,7 @@ func New() Model {
 		registry:    state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput: pi,
 		workCache:   make(map[string]git.Work),
+		spinner:     newSpinner(),
 	}
 }
 
@@ -279,8 +284,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case spinner.TickMsg:
+		if m.pending == nil {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		// Give up rather than spin forever if the pane never arrives.
+		if m.pending.expired(time.Now()) {
+			log.Info("worktree %q: agent pane never appeared", m.pending.name)
+			m.statusErr = fmt.Sprintf("worktree %q created, but its agent never started", m.pending.name)
+			m.pending = nil
+			return m, nil
+		}
+		return m, cmd
+
+	case worktreeCreatedMsg:
+		if msg.err != nil {
+			log.Info("worktree %q failed: %v", msg.name, msg.err)
+			m.statusErr = msg.err.Error()
+			m.pending = nil
+			return m, nil
+		}
+		log.Info("created worktree %s", msg.name)
+		// Keep waiting: the agent still has to start before the pane exists.
+		return m, doScan(m.statesDir)
+
 	case SessionsUpdatedMsg:
 		m.sessions = []models.Session(msg)
+		if m.pending != nil && m.pending.satisfiedBy(m.sessions) {
+			log.Info("worktree %q is live", m.pending.name)
+			m.pending = nil
+		}
 		m.workCache = make(map[string]git.Work) // recompute work against the new scan
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
@@ -402,6 +437,10 @@ func (m Model) view() string {
 		overlay := m.renderPromptOverlay()
 		return placeOverlay(m.width, m.height, overlay, base)
 	}
+	if m.confirmMode {
+		overlay := m.renderConfirmOverlay()
+		return placeOverlay(m.width, m.height, overlay, base)
+	}
 
 	return base
 }
@@ -417,11 +456,41 @@ func (m Model) renderPromptOverlay() string {
 	return dialogStyle().Padding(1, 2).Render(content)
 }
 
+// renderConfirmOverlay renders the worktree removal dialog. It reports the
+// worktree's outstanding work, because git refuses to remove a dirty worktree —
+// better to say so before the keypress than to fail after it.
+func (m Model) renderConfirmOverlay() string {
+	c := theme.Current().Colors
+	s := m.confirmOn
+
+	title := lipgloss.NewStyle().Foreground(c.Warning).Bold(true).
+		Render("Remove worktree")
+	name := lipgloss.NewStyle().Foreground(c.Foreground).Bold(true).Render(s.Details.Worktree)
+	path := lipgloss.NewStyle().Foreground(c.Muted).Render(s.Path)
+
+	work := m.workFor(s)
+	var state string
+	if work.Dirty > 0 {
+		state = lipgloss.NewStyle().Foreground(c.Warning).
+			Render(fmt.Sprintf("%d uncommitted change(s) — removal will be refused", work.Dirty))
+	} else {
+		state = lipgloss.NewStyle().Foreground(c.Muted).
+			Render("clean — the branch is kept, only the directory goes")
+	}
+
+	hint := lipgloss.NewStyle().Foreground(c.Muted).Render("y  delete      n / esc  keep")
+	content := title + "\n\n" + name + "\n" + path + "\n\n" + state + "\n\n" + hint
+	return dialogStyle().Padding(1, 2).Render(content)
+}
+
 // --- Key handling ---
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	log.Debug("key: %q", key)
+
+	// Any keystroke acknowledges the last failure.
+	m.statusErr = ""
 
 	// Theme picker intercepts all keys when open
 	if m.showThemePick {
@@ -707,13 +776,12 @@ func (m Model) handleWorktreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// The agent inherits from the session the worktree is spawned off, so
 		// a repo full of Claude panes keeps getting Claude panes.
-		sessName, err := session.CreateWorktree(m.worktreeOn.Path, name, string(m.worktreeOn.AgentType))
-		if err != nil {
-			log.Info("worktree %q failed: %v", name, err)
-			return m, nil
-		}
-		log.Info("created worktree %s in session %s", name, sessName)
-		return m, doScan(m.statesDir)
+		m.pending = &pendingWorktree{name: name, deadline: time.Now().Add(worktreeWait)}
+		m.statusErr = ""
+		return m, tea.Batch(
+			m.spinner.Tick,
+			createWorktreeCmd(m.worktreeOn.Path, name, string(m.worktreeOn.AgentType)),
+		)
 	default:
 		var cmd tea.Cmd
 		m.searchInput, cmd = m.searchInput.Update(msg)
@@ -1201,20 +1269,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	} else {
 		m.searchInput.Prompt = " > "
 	}
-	if m.confirmMode {
-		// A destructive question must not hide in the search prompt, where a
-		// stray keystroke answered it before anyone noticed it was asked.
-		c := theme.Current().Colors
-		banner := lipgloss.NewStyle().
-			Foreground(c.Background).
-			Background(c.Warning).
-			Bold(true).
-			Padding(0, 1).
-			Render(fmt.Sprintf("Remove worktree %q?  y = delete   n = keep", m.confirmOn.Details.Worktree))
-		b.WriteString(" " + banner)
-	} else {
-		b.WriteString(m.searchInput.View())
-	}
+	b.WriteString(m.statusLine())
 	b.WriteString("\n\n")
 
 	// Session list.

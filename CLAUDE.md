@@ -80,6 +80,18 @@ worktrees with it. On a worktree pane it then offers removal; `git.RemoveWorktre
 passes `--force`, so git refuses while there is uncommitted work, and the branch is left
 intact.
 
+Worktree creation runs as a `tea.Cmd`, never inline: doing it in the update loop froze
+the TUI for seconds. A spinner shows until the new agent pane appears in a scan
+(`pendingWorktree.satisfiedBy`) rather than until nagare's own work returns, because
+`claude -w` needs seconds more to build the worktree and start. Failures surface in the
+status line instead of only reaching the log.
+
+Removal is confirmed by a centred dialog (`renderConfirmOverlay`) drawn with
+`placeOverlay`, like the help and theme overlays; only `y`/`n`/`esc` answer it. Claude
+locks the worktrees it creates, so `git.RemoveWorktree` checks cleanliness itself,
+unlocks, then removes without `--force` — passing `--force` would override the dirty
+guard too.
+
 The detail pane shows outstanding work (`git.WorkStatus`) and warns when two agents
 share one directory. Work is cached per path and refreshed per scan: the pane
 re-renders every frame for the status-dot pulse, so git must never be called from

@@ -23,6 +23,10 @@ const (
 	// minNameWidth is the floor for a name column. Below this a name is all
 	// ellipsis and conveys nothing, so narrow panels overflow instead.
 	minNameWidth = 6
+	// minCellHeight is the shortest a grid card can be and still be a card:
+	// border (2), padding (2), separator (1), one row of header and one of
+	// preview. Anything less and its content cannot fit inside its own box.
+	minCellHeight = 7
 	// ellipsis marks a shortened name. One cell, unlike "..." — on a 30-column
 	// panel those two extra cells are two more characters of the actual name.
 	ellipsis = "…"

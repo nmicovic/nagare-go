@@ -1764,19 +1764,47 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 	cols := gridColumns(len(m.filtered))
 	cellWidth := totalWidth / cols
 	numRows := (len(m.filtered) + cols - 1) / cols
-	cellHeight := (totalHeight - 2 - numRows) / numRows // search + row gaps
-	if cellHeight < 8 {
-		cellHeight = 8
+
+	// Card rows get everything but the search bar line. The previous arithmetic
+	// subtracted a per-row gap that does not exist — rows are joined directly —
+	// and then clamped the result up to a minimum without reducing how many rows
+	// it drew, so on a short terminal the grid was taller than the frame and the
+	// bottom cards were silently cut off by the frame clamp in View.
+	avail := totalHeight - 1
+	if avail < minCellHeight {
+		avail = minCellHeight
+	}
+	cellHeight := avail / numRows
+	if cellHeight < minCellHeight {
+		cellHeight = minCellHeight
+	}
+
+	// When every row cannot fit at the minimum card height, show fewer rows and
+	// scroll rather than drawing cards that get clipped. Same principle as the
+	// list view: a partly drawn row is worse than an absent one.
+	visibleRows := max(min(avail/cellHeight, numRows), 1)
+	startRow := 0
+	if cursorRow := m.cursor / cols; cursorRow >= visibleRows {
+		startRow = cursorRow - visibleRows + 1
 	}
 
 	// Build rows of cells
 	var rows []string
 	var cards []cardHit
-	for i := 0; i < len(m.filtered); i += cols {
+	for i := startRow * cols; i < len(m.filtered) && len(rows) < visibleRows; i += cols {
 		var cells []string
 		for j := 0; j < cols && i+j < len(m.filtered); j++ {
 			idx := i + j
 			s := m.filtered[idx]
+
+			// Content width inside the card's border (2) and its Padding(1), which
+			// is one cell per side and so two in total — not the four the previous
+			// arithmetic subtracted, which left the separator two cells short of
+			// the card and the preview needlessly truncated.
+			innerWidth := cellWidth - 4
+			if innerWidth < 10 {
+				innerWidth = 10
+			}
 
 			// Header: status dot + name + agent badge
 			dot := statusDot(s.Status, m.pulseOn)
@@ -1787,18 +1815,22 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				Padding(0, 1).
 				Render(models.AgentLabel(s.AgentType))
 
-			header := fmt.Sprintf(" %s %s %s  %s", dot, s.Name, agentBadge, statusLabel)
+			// The header stays on one row: the name is truncated to whatever the
+			// badge and status leave, exactly as list rows do. Letting it wrap made
+			// a narrow card taller than its cell, and a name broken across two rows
+			// is unreadable anyway.
+			// 5 = leading space, two separating spaces, and the double space
+			// before the status label.
+			fixed := lipgloss.Width(dot) + lipgloss.Width(agentBadge) + lipgloss.Width(statusLabel) + 5
+			header := fmt.Sprintf(" %s %s %s  %s", dot,
+				truncate(s.Name, max(innerWidth-fixed, minNameWidth)), agentBadge, statusLabel)
 
-			// Meta line: path + git branch
+			// Meta line: path + git branch. Allowed to wrap — seeing the whole path
+			// is worth a row — with the card's preview budget derived from however
+			// tall it actually ends up.
 			meta := mutedStyle().Render(fmt.Sprintf("   %s", s.Path))
 			if s.Details.GitBranch != "" {
 				meta += mutedStyle().Render(fmt.Sprintf("  (%s)", s.Details.GitBranch))
-			}
-
-			// Separator between header and preview
-			innerWidth := cellWidth - 6 // borders + padding
-			if innerWidth < 10 {
-				innerWidth = 10
 			}
 
 			// Small agent art floated to the right of the header
@@ -1814,8 +1846,30 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 
 			separator := fadingRule(innerWidth, c.Border, c.Surface)
 
-			// Preview: capture pane content for this session
-			previewHeight := cellHeight - 7
+			// Measure the header block instead of assuming it is two rows.
+			//
+			// It is two rows only when the meta line fits: a long path plus a long
+			// branch wraps it to three, which made the card one row taller than
+			// cellHeight — and fitBox then clipped that row off, taking the card's
+			// bottom border with it. An open-bottomed card is what the bug looked
+			// like from the outside.
+			// Wrap the header block to the card width first, so what follows counts
+			// rendered rows rather than string lines — one line of meta can occupy
+			// two rows, and clamping the string would not have shortened it.
+			topBlock = lipgloss.NewStyle().Width(innerWidth).Render(topBlock)
+			topLines := strings.Split(topBlock, "\n")
+
+			// Card budget: border (2), padding (2), separator (1).
+			const cardChrome = 2 + 2 + 1
+			// Leave at least one row of preview, clamping the header if even that
+			// does not fit — a truncated header beats a card with no bottom edge.
+			if maxTop := cellHeight - cardChrome - 1; maxTop > 0 && len(topLines) > maxTop {
+				topLines = topLines[:maxTop]
+				topBlock = strings.Join(topLines, "\n")
+			}
+			topHeight := len(topLines)
+
+			previewHeight := cellHeight - cardChrome - topHeight
 			if previewHeight < 1 {
 				previewHeight = 1
 			}
@@ -1840,8 +1894,8 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
 
 			// The card's bounds in frame coordinates: one row down for the search
-			// bar, then whole cells from there.
-			x0, y0 := j*cellWidth, 1+(i/cols)*cellHeight
+			// bar, then whole cells from there, relative to the first visible row.
+			x0, y0 := j*cellWidth, 1+(i/cols-startRow)*cellHeight
 			cards = append(cards, cardHit{
 				index: idx,
 				area:  image.Rect(x0, y0, x0+cellWidth, y0+cellHeight),

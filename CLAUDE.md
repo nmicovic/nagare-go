@@ -180,6 +180,31 @@ The footer shows only the keys valid for the current mode and selection, trimmed
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
 
+### Grid cards
+
+Card height arithmetic must be *measured*, never assumed. Three bugs came from
+assuming it:
+
+- `previewHeight = cellHeight - 7` assumed the header block was exactly two rows.
+  A long path plus a long branch wraps the meta line to a third, making the card a
+  row taller than its cell — and `fitBox`'s `MaxHeight` then clipped that row,
+  taking the bottom border with it. The card rendered with no bottom edge.
+- `cellHeight` was clamped *up* to a minimum without reducing how many rows were
+  drawn, so on a short terminal the grid was taller than the frame and the lower
+  cards were silently cut off by the clamp in `View`. It now shows fewer rows and
+  scrolls to keep the selected card visible, like the list view.
+- `innerWidth = cellWidth - 6` over-subtracted: `Padding(1)` is one cell per side,
+  so two, not four. The separator fell two cells short of its card.
+
+The header is kept to one row by truncating the name, as list rows do; the meta
+line may wrap and the preview budget is derived from its measured height. If even
+one row of preview will not fit, the header block is clamped by *rendered rows* —
+clamping string lines does not work, because one line can occupy several rows.
+
+`TestGridCardsAreClosedBoxes` checks all four corners of every card across five
+terminal sizes, five session counts and both content shapes; the frame-size test
+covers the arithmetic feeding through to the whole frame.
+
 ### Animation
 
 Overlays rise into place on a harmonica spring (`internal/picker/anim.go`), ~233ms

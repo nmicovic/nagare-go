@@ -1,0 +1,167 @@
+package picker
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/nemke/nagare-go/internal/models"
+)
+
+// gridModel renders a grid of n sessions built by shape, with previews filled so
+// cards are at their full content height.
+func gridModel(t *testing.T, w, h int, sessions []models.Session) Model {
+	t.Helper()
+	m := driveModel(t, NewForTest(),
+		tea.WindowSizeMsg{Width: w, Height: h},
+		SessionsUpdatedMsg(sessions),
+	)
+	m.viewMode = GridView
+	m.gridPreviews = map[string]string{}
+	for _, s := range m.filtered {
+		m.gridPreviews[sessionKey(s)] = strings.Repeat("a preview line of output\n", 30)
+	}
+	return m
+}
+
+// runeAt returns the visible rune at a frame coordinate.
+func runeAt(plain []string, x, y int) string {
+	if y < 0 || y >= len(plain) {
+		return "<row oob>"
+	}
+	r := []rune(plain[y])
+	if x < 0 || x >= len(r) {
+		return "<col oob>"
+	}
+	return string(r[x])
+}
+
+func plainFrame(frame string) []string {
+	rows := strings.Split(frame, "\n")
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = ansi.Strip(r)
+	}
+	return out
+}
+
+// longSessions produces the shape that broke: a path and branch long enough that
+// the card's meta line wraps to a second row.
+func longSessions(n int) []models.Session {
+	out := make([]models.Session, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, models.Session{
+			Name:        fmt.Sprintf("cosmic-platform-frontend/claude_%02d", i),
+			SessionName: "cosmic-platform-frontend",
+			Path:        "/home/nemke/Projects/cosmic-platform-frontend",
+			Status:      models.StatusIdle,
+			AgentType:   models.AgentClaude,
+			Details: models.SessionDetails{
+				RepoName:  "cosmic-platform-frontend",
+				Worktree:  "feat",
+				GitBranch: "picker-depth-and-mouse",
+			},
+		})
+	}
+	return out
+}
+
+func shortSessions(n int) []models.Session {
+	out := make([]models.Session, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, models.Session{
+			Name:        fmt.Sprintf("s%d", i),
+			SessionName: fmt.Sprintf("s%d", i),
+			Path:        "/tmp/s",
+			Status:      models.StatusIdle,
+			AgentType:   models.AgentClaude,
+		})
+	}
+	return out
+}
+
+// TestGridCardsAreClosedBoxes is the regression guard for the open-bottomed card.
+//
+// previewHeight used to be derived as cellHeight-7, which assumed the header block
+// was exactly two rows. A long path plus a long branch wraps the meta line to a
+// third row, making the card one row taller than its cell — and fitBox's MaxHeight
+// then clipped that row, taking the bottom border with it. The card rendered with
+// no bottom edge at all.
+func TestGridCardsAreClosedBoxes(t *testing.T) {
+	sizes := [][2]int{{207, 60}, {200, 50}, {160, 40}, {120, 30}, {90, 24}}
+	shapes := map[string]func(int) []models.Session{
+		"wrapping meta": longSessions,
+		"short meta":    shortSessions,
+	}
+
+	for name, shape := range shapes {
+		for _, count := range []int{1, 2, 4, 7, 9} {
+			for _, sz := range sizes {
+				w, h := sz[0], sz[1]
+				t.Run(fmt.Sprintf("%s/%d sessions/%dx%d", name, count, w, h), func(t *testing.T) {
+					m := gridModel(t, w, h, shape(count))
+					frame, hits := m.view()
+					plain := plainFrame(frame)
+
+					if len(hits.cards) != count {
+						t.Fatalf("got %d cards for %d sessions", len(hits.cards), count)
+					}
+					for _, card := range hits.cards {
+						a := card.area
+						corners := map[string]struct {
+							x, y int
+							want string
+						}{
+							"top-left":     {a.Min.X, a.Min.Y, "╭"},
+							"top-right":    {a.Max.X - 1, a.Min.Y, "╮"},
+							"bottom-left":  {a.Min.X, a.Max.Y - 1, "╰"},
+							"bottom-right": {a.Max.X - 1, a.Max.Y - 1, "╯"},
+						}
+						for corner, c := range corners {
+							if got := runeAt(plain, c.x, c.y); got != c.want {
+								t.Errorf("card %d %s corner at (%d,%d) = %q, want %q",
+									card.index, corner, c.x, c.y, got, c.want)
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestGridCardBottomEdgeIsContinuous — a clipped card can still show corners if
+// the clip lands elsewhere, so check the whole bottom edge is border, not content.
+func TestGridCardBottomEdgeIsContinuous(t *testing.T) {
+	m := gridModel(t, 207, 60, longSessions(7))
+	frame, hits := m.view()
+	plain := plainFrame(frame)
+
+	for _, card := range hits.cards {
+		a := card.area
+		y := a.Max.Y - 1
+		for x := a.Min.X + 1; x < a.Max.X-1; x++ {
+			if got := runeAt(plain, x, y); got != "─" {
+				t.Fatalf("card %d bottom edge at (%d,%d) = %q, want a border rule",
+					card.index, x, y, got)
+				break
+			}
+		}
+	}
+}
+
+// TestGridFrameIsExactlySized — the card height arithmetic feeds the frame's, so
+// an off-by-one there smears the alt screen.
+func TestGridFrameIsExactlySized(t *testing.T) {
+	for _, sz := range [][2]int{{207, 60}, {160, 40}, {120, 30}, {90, 24}} {
+		w, h := sz[0], sz[1]
+		m := gridModel(t, w, h, longSessions(7))
+		lines, width := frameSize(m.View().Content)
+		if lines != h || width != w {
+			t.Errorf("%dx%d: frame is %dx%d", w, h, width, lines)
+		}
+	}
+}

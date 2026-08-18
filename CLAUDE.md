@@ -281,7 +281,7 @@ covers the arithmetic feeding through to the whole frame.
 
 ### Animation
 
-Six animations, on two clocks — one transient at 30fps for motion, one slow at
+Five animations, on two clocks — one transient at 30fps for motion, one slow at
 10fps for anything continuous.
 
 **Overlay entry** rises into place on a harmonica spring (`internal/picker/anim.go`),
@@ -313,13 +313,11 @@ the previous index no longer refers to the same session), in grid view (selectio
 there is a card border, which does not crossfade legibly), and while an overlay has
 the screen.
 
-**Grid entry** staggers the cards in when the grid is first shown — the one moment
-a lot of content appears at once with no way to tell what arrived. Cards rise on the
-same spring, three frames apart, from a shared precomputed offset table
-(`gridRiseOffsets`) rather than a spring per card: the motion is identical and only
-the start time differs, so a card's offset is a lookup at frame minus its own delay
-and the whole animation is a single int of state. `riseCard` shifts a card *inside*
-its cell, so the grid's layout and the mouse hit rectangles never move.
+Tried and removed: **staggering the grid cards in** when the grid is first shown.
+It was technically fine — one shared spring table, cards shifted inside their cells
+so the layout never moved — and it read as fussy. Cards appearing is not a moment
+that needs narrating, and animating a whole screenful of content draws attention to
+the transition rather than to the content. Do not re-add it.
 
 In grid view the selection slide becomes a **dimming trail**: a gradient border has
 no partial form — `BorderForegroundBlend` takes stops, not an amount — so the card

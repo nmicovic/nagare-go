@@ -108,7 +108,6 @@ type Model struct {
 	breath        float64                         // phase of the status-dot breath, 0..1
 	breathOn      bool                            // whether the breath clock is currently ticking
 	slide         selectionSlide                  // highlight crossfading between rows
-	gridEnter     gridEntry                       // staggered arrival of grid cards
 	arrived       string                          // worktree whose pane just appeared, to flash once it is listed
 	history       map[string][]uint8              // recent activity levels per session, for sparklines
 	flashes       map[string]flashState           // rows fading after a state change
@@ -473,9 +472,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.slide.step() {
 			moving = true
 		}
-		if m.gridEnter.step(len(m.filtered)) {
-			moving = true
-		}
 		if !moving {
 			return m, nil
 		}
@@ -483,7 +479,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		wasOpen := m.overlayOpen()
-		wasMode := m.viewMode
 		prevCursor, prevLen := m.cursor, len(m.filtered)
 
 		next, cmd := m.handleKey(msg)
@@ -505,15 +500,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if updated.startSlide(prevCursor, prevLen) {
 			cmds = append(cmds, doAnimTick())
-		}
-		// Arriving in grid view staggers the cards in. Detected here for the same
-		// reason as the others: whatever switches views cannot forget to animate.
-		if updated.animEnabled && wasMode == ListView && updated.viewMode == GridView {
-			updated.gridEnter.start()
-			cmds = append(cmds, doAnimTick())
-		}
-		if updated.viewMode != GridView {
-			updated.gridEnter.stop()
 		}
 		return updated, tea.Batch(cmds...)
 
@@ -1916,10 +1902,6 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 		startRow = cursorRow - visibleRows + 1
 	}
 
-	// Fill for the gap above a card that has not finished rising: the space between
-	// cards is canvas, so that is what shows through.
-	cardFill := lipgloss.NewStyle().Background(canvasBg())
-
 	// Build rows of cells
 	var rows []string
 	var cards []cardHit
@@ -2074,10 +2056,6 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 					BorderForeground(flashTint(c.Border, f, flashBorderDepth))
 			}
 			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
-			// Cards rise into their cells in sequence when the grid is first shown.
-			// The cell itself never moves, so the grid's layout — and the hit
-			// rectangles below — stay put while the card slides inside it.
-			cell = riseCard(cell, m.gridEnter.offsetFor(idx), cellWidth, cellHeight, cardFill)
 
 			// The card's bounds in frame coordinates: one row down for the search
 			// bar, then whole cells from there, relative to the first visible row.

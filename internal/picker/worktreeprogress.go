@@ -83,6 +83,10 @@ func (m Model) statusLine() string {
 			Render(fmt.Sprintf(" Creating worktree %q — waiting for the agent to start…", m.pending.name))
 	}
 	if m.statusErr != "" {
+		// A curly underline was tried here and rejected: lipgloss v2 emits a
+		// separate SGR run per grapheme once a styled underline is set, which
+		// turned a 23-character message into 958 bytes. The glyph and the Error
+		// color already carry the signal.
 		return " " + lipgloss.NewStyle().Foreground(c.Error).Bold(true).Render("✗ "+m.statusErr)
 	}
 	return m.searchInput.View()

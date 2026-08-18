@@ -61,7 +61,7 @@ func renderAgentArtSmall(agent models.AgentType) string {
 		return ""
 	}
 	from, _ := colorful.Hex(grad[0])
-	bg := theme.Current().Colors.Background
+	bg := theme.Current().Colors.Surface
 	label := strings.ToUpper(models.AgentLabel(agent))
 	style := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(from.Hex())).
@@ -87,7 +87,7 @@ func renderAgentArt(agent models.AgentType) string {
 	lines := strings.Split(art, "\n")
 	from, _ := colorful.Hex(grad[0])
 	to, _ := colorful.Hex(grad[1])
-	bg := theme.Current().Colors.Background
+	bg := theme.Current().Colors.Surface
 
 	// Find the widest line to set a consistent block width.
 	artWidth := 0

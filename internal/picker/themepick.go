@@ -71,5 +71,5 @@ func themePickOverlay(names []string, cursor int, width, height int) string {
 		Width(itemWidth+8).
 		Height(len(names)+8).
 		Padding(1, 2).
-		Render(strings.Join(lines, "\n"))
+		Render(onPlane(strings.Join(lines, "\n"), c.Overlay))
 }

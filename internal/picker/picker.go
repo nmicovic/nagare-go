@@ -453,7 +453,7 @@ func (m Model) renderPromptOverlay() string {
 	hint := lipgloss.NewStyle().Foreground(c.Muted).
 		Render("Enter send  Esc cancel")
 	content := title + "\n\n" + m.promptInput.View() + "\n\n" + hint
-	return dialogStyle().Padding(1, 2).Render(content)
+	return dialogStyle().Padding(1, 2).Render(onPlane(content, c.Overlay))
 }
 
 // renderConfirmOverlay renders the worktree removal dialog. It reports the
@@ -480,7 +480,7 @@ func (m Model) renderConfirmOverlay() string {
 
 	hint := lipgloss.NewStyle().Foreground(c.Muted).Render("y  delete      n / esc  keep")
 	content := title + "\n\n" + name + "\n" + path + "\n\n" + state + "\n\n" + hint
-	return dialogStyle().Padding(1, 2).Render(content)
+	return dialogStyle().Padding(1, 2).Render(onPlane(content, c.Overlay))
 }
 
 // --- Key handling ---
@@ -1294,7 +1294,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	// primary panel. Other panels (preview, details, empty states) stay
 	// on the quieter Border color.
 	return fitBox(primaryPanelStyle(), outerWidth, outerHeight).
-		Render(b.String())
+		Render(onPlane(b.String(), surfaceBg()))
 }
 
 func (m Model) renderListView(width, height int) string {
@@ -1383,7 +1383,7 @@ func (m Model) renderListView(width, height int) string {
 		// convention) — no caret or gutter rune. Bold the text for an
 		// extra hierarchy cue. The tint color is per-theme (SelBg), so
 		// every theme controls exactly how loud its selection reads.
-		rowBg := c.Background
+		rowBg := c.Surface
 		nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
 		if i == m.cursor {
 			rowBg = c.SelBg
@@ -1441,7 +1441,7 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 	}
 	// Per-segment background, for the same reason as the session rows: an inner
 	// reset would drop the tint for everything after it.
-	bg := lipgloss.NewStyle().Background(c.Background)
+	bg := lipgloss.NewStyle().Background(c.Surface)
 	var content strings.Builder
 	for _, part := range []string{" ", name, strings.Repeat(" ", gap), count, strings.Repeat(" ", rowGutter)} {
 		content.WriteString(bg.Render(part))
@@ -1478,7 +1478,7 @@ func (m Model) renderGridView(width, height int) string {
 			name := truncate(s.Name, maxLen)
 			// Selection: tint the cell background; same palette slot as the
 			// list view so the two modes read consistently.
-			cellBg := c.Background
+			cellBg := c.Surface
 			nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
 			if idx == m.cursor {
 				cellBg = c.SelBg
@@ -1500,7 +1500,7 @@ func (m Model) renderGridView(width, height int) string {
 func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
 		return fitBox(panelStyle(), outerWidth, outerHeight).
-			Render(mutedStyle().Render("No session selected"))
+			Render(onPlane(mutedStyle().Render("No session selected"), surfaceBg()))
 	}
 
 	innerWidth := outerWidth - 4
@@ -1520,9 +1520,15 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
 		Padding(0, 1)
 
-	// Build info column
+	// Build info column.
+	// The path is emitted as an OSC 8 hyperlink, so a terminal that supports
+	// them (kitty, WezTerm, Ghostty, iTerm2, foot, recent VTE) makes it
+	// clickable and opens the working tree in the desktop file manager. The
+	// escape is inert everywhere else — the text renders identically, so there
+	// is no capability to detect and no fallback to write.
 	var info strings.Builder
-	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), val.Render(s.Path)))
+	pathStyled := subtleStyle().Hyperlink("file://" + s.Path).Render(s.Path)
+	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), pathStyled))
 	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Agent "), agentStyle.Render(models.AgentLabel(s.AgentType))))
 	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Status"), statusStyle.Render(models.StatusLabel(s.Status))))
 
@@ -1533,7 +1539,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	// worktree, so without this a worktree pane never says what it forked from.
 	if s.Details.RepoName != "" && s.Details.Worktree != "" {
 		repo := fmt.Sprintf("%s (worktree %s)", s.Details.RepoName, s.Details.Worktree)
-		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Repo  "), val.Render(repo)))
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Repo  "), subtleStyle().Render(repo)))
 
 		w := m.workFor(s)
 		state := "clean"
@@ -1552,7 +1558,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 			warn.Render(fmt.Sprintf("%d agents in this directory", n))))
 	}
 	if s.Details.LastActivity != "" {
-		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), val.Render(formatTimeAgo(s.Details.LastActivity))))
+		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), subtleStyle().Render(formatTimeAgo(s.Details.LastActivity))))
 	}
 	if s.LastMessage != "" {
 		msg := s.LastMessage
@@ -1571,11 +1577,11 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 		infoWidth := innerWidth - artWidth - 2 // 2 for gap
 		infoBlock := lipgloss.NewStyle().
 			Width(infoWidth).
-			Background(c.Background).
+			Background(c.Surface).
 			Render(titleStyle().Render(s.Name) + "\n\n" + info.String())
 		gap := lipgloss.NewStyle().
 			Width(2).
-			Background(c.Background).
+			Background(c.Surface).
 			Render("")
 		detail.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, art, gap, infoBlock))
 	} else {
@@ -1607,7 +1613,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	}
 
 	detailStr := fitBox(panelStyle(), outerWidth, detailOuter).
-		Render(detailContent)
+		Render(onPlane(detailContent, c.Surface))
 
 	// Preview section: gets the remaining height.
 	// inner = previewOuter - border(2), no vertical padding on previewPanelStyle.
@@ -1642,7 +1648,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	}
 
 	previewStr := fitBox(previewPanelStyle(), outerWidth, previewOuter).
-		Render(previewContent)
+		Render(onPlane(previewContent, c.Surface))
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
 }
@@ -1715,12 +1721,12 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 			topBlock := header + "\n" + meta
 			if art != "" && innerWidth > 30 {
 				textWidth := innerWidth - artWidth - 1
-				textCol := lipgloss.NewStyle().Width(textWidth).Background(c.Background).Render(topBlock)
-				gap := lipgloss.NewStyle().Width(1).Background(c.Background).Render("")
+				textCol := lipgloss.NewStyle().Width(textWidth).Background(c.Surface).Render(topBlock)
+				gap := lipgloss.NewStyle().Width(1).Background(c.Surface).Render("")
 				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, textCol, gap, art)
 			}
 
-			separator := lipgloss.NewStyle().Foreground(c.Border).Render(strings.Repeat("─", innerWidth))
+			separator := fadingRule(innerWidth, c.Border, c.Surface)
 
 			// Preview: capture pane content for this session
 			previewHeight := cellHeight - 7
@@ -1732,33 +1738,47 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 
 			content := topBlock + "\n" + separator + "\n" + preview
 
-			// Border color: bright for selected, muted for others
-			borderColor := c.Border
-			if idx == m.cursor {
-				borderColor = c.Primary
-			}
-
+			// The selected card takes the same gradient sweep as the focused
+			// panel in list view, so "this is where you are" looks identical in
+			// both modes. Unselected cards stay on quiet chrome.
 			cellStyle := lipgloss.NewStyle().
-				Background(c.Background).
+				Background(c.Surface).
 				Foreground(c.Foreground).
 				BorderStyle(lipgloss.RoundedBorder()).
-				BorderForeground(borderColor).
-				BorderBackground(c.Background).
+				BorderForeground(c.Border).
+				BorderBackground(c.Surface).
 				Padding(1)
-			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(content)
+			if idx == m.cursor {
+				cellStyle = cellStyle.BorderForegroundBlend(c.GradientFrom, c.GradientTo)
+			}
+			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
 
 			cells = append(cells, cell)
 		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 	}
 
-	grid := strings.Join(rows, "\n")
-	result := " " + searchBar + "\n" + grid
-	// Pad to totalHeight so the help bar (appended by View) lands at the bottom.
-	if pad := totalHeight - (strings.Count(result, "\n") + 1); pad > 0 {
-		result += strings.Repeat("\n", pad)
+	// Unlike list view, grid view composes straight onto the canvas — the cards
+	// are the panels and everything around them is bare ground. So the search
+	// bar and the bottom padding have to carry the canvas plane themselves: a
+	// fg-only search input and a bare "\n" pad each leave a whole row on the
+	// terminal's own background, which is a visible seam now that the canvas is
+	// a plane rather than whatever the terminal happened to be.
+	canvasLine := lipgloss.NewStyle().Background(canvasBg()).Width(totalWidth)
+
+	out := []string{canvasLine.Render(onPlane(" "+searchBar, canvasBg()))}
+	// Card rows already carry their own plane, so they are only padded out to
+	// the full width — for when cols does not divide totalWidth evenly. Running
+	// onPlane over them would inject the canvas *inside* the cards and undo
+	// their surface.
+	for _, row := range rows {
+		out = append(out, strings.Split(canvasLine.Render(row), "\n")...)
 	}
-	return result
+	// Pad to totalHeight so the help bar (appended by View) lands at the bottom.
+	for len(out) < totalHeight {
+		out = append(out, canvasLine.Render(""))
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m Model) getGridPreview(s models.Session, width, height int) string {

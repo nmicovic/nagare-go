@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
 
@@ -115,11 +116,15 @@ func renderNameWithMatches(display, full, query string, base lipgloss.Style, acc
 	return string(b)
 }
 
-// sectionHeader renders an inline section title followed by a dim fill
-// line (crush / gh-dash convention). No surrounding box — tittle tiles
-// look competing inside an already-bordered panel.
+// sectionHeader renders an inline section title followed by a fill line
+// (crush / gh-dash convention). No surrounding box — titled tiles compete
+// inside an already-bordered panel.
 //
 //	Keyboard Shortcuts ───────────────────────
+//
+// The rule fades out along its length instead of running at one flat value.
+// A uniform line reads as a divider that means something; a fading one reads
+// as the title trailing off, which is what a section header actually is.
 func sectionHeader(title string, width int) string {
 	c := theme.Current().Colors
 	titleStyled := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render(title)
@@ -127,49 +132,229 @@ func sectionHeader(title string, width int) string {
 	if fillWidth < 1 {
 		return titleStyled
 	}
-	fill := lipgloss.NewStyle().Foreground(c.Muted).Render(strings.Repeat("─", fillWidth))
-	return titleStyled + " " + fill
+	return titleStyled + " " + fadingRule(fillWidth, c.Border, c.Overlay)
+}
+
+// fadingRule draws a horizontal rule of n cells that blends from `from` to
+// `to`, so it dissolves into whatever it is drawn on.
+func fadingRule(n int, from, to color.Color) string {
+	if n < 1 {
+		return ""
+	}
+	stops := lipgloss.Blend1D(n, from, to)
+	var b strings.Builder
+	for _, stop := range stops {
+		b.WriteString(lipgloss.NewStyle().Foreground(stop).Render("─"))
+	}
+	return b.String()
 }
 
 // Style functions — always build fresh from theme.Current() so theme
 // switches take effect on the next View() call.
 
+// The three depth planes, and the rule for choosing between them:
+//
+//	canvasBg   the ground a frame sits on — the help bar, the gaps between cards
+//	surfaceBg  anything *inside* a panel, so the panel reads as one lifted slab
+//	overlayBg  dialogs, which float above the panels
+//
+// Getting this wrong is visible: a fill left on canvasBg inside a panel punches
+// a hole straight through it.
+
+func canvasBg() color.Color {
+	return theme.Current().Colors.Background
+}
+
+func surfaceBg() color.Color {
+	return theme.Current().Colors.Surface
+}
+
+// onPlane re-asserts bg for every cell of content that would otherwise fall
+// back to the terminal's own background.
+//
+// Two things leave such cells behind. A style that sets only a foreground ends
+// its run with a full SGR reset, which clears the background for everything
+// after it on that line — the reason the row and group-header renderers below
+// carry their tint per segment instead of wrapping the finished string. And
+// captured pane output is foreign ANSI: it resets whenever it likes and knows
+// nothing about the panel it is being drawn into.
+//
+// Both were invisible for as long as every panel shared the terminal's
+// background. They stopped being invisible the moment panels were lifted onto
+// their own plane, because each gap became a hole punched straight through the
+// panel with the terminal showing through it.
+//
+// Wrapping content in an outer Background style cannot fix this — that is the
+// bug, not the cure. The background has to be re-established after each reset.
+func onPlane(content string, bg color.Color) string {
+	if content == "" {
+		return content
+	}
+	set := bgSeq(bg)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = set + reassertBg(line, set)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// bgSeq is the SGR sequence that sets bg as the background. Truecolor is
+// emitted unconditionally, exactly as every lipgloss style in nagare already
+// does; Bubble Tea's renderer downsamples for the terminal's actual profile.
+func bgSeq(bg color.Color) string {
+	r, g, b, _ := bg.RGBA()
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+}
+
+// reassertBg re-emits set after every SGR sequence in line that drops the
+// background, so no printable cell is left on the terminal's default.
+func reassertBg(line, set string) string {
+	var b strings.Builder
+	b.Grow(len(line) + len(set))
+
+	for i := 0; i < len(line); {
+		if seq, n := scanSGR(line[i:]); n > 0 {
+			b.WriteString(seq)
+			i += n
+			// Nothing follows on this line, so there is no cell left to fix and
+			// re-asserting would only cost bytes on every single line.
+			if i < len(line) && clearsBackground(seq) {
+				b.WriteString(set)
+			}
+			continue
+		}
+		b.WriteByte(line[i])
+		i++
+	}
+	return b.String()
+}
+
+// scanSGR matches a leading SGR ("CSI ... m") sequence, returning it and its
+// byte length. Only SGR is of interest: it is the only sequence that changes
+// the background.
+func scanSGR(s string) (string, int) {
+	if !strings.HasPrefix(s, "\x1b[") {
+		return "", 0
+	}
+	for i := 2; i < len(s); i++ {
+		c := s[i]
+		if c == 'm' {
+			return s[:i+1], i + 1
+		}
+		// Parameter bytes only; anything else means this is some other
+		// sequence (a cursor move, an OSC 8 hyperlink) that we leave alone.
+		if (c < '0' || c > '9') && c != ';' && c != ':' {
+			return "", 0
+		}
+	}
+	return "", 0
+}
+
+// clearsBackground reports whether an SGR sequence leaves the background unset:
+// either a full reset, or an explicit default-background (49). A sequence that
+// sets any background — truecolor, 256-color, or one of the ANSI pairs — does
+// not need fixing up.
+// extendedColorParams returns how many fields after fields[i] belong to an
+// extended color introducer (38, 48, 58), so the caller can skip past them.
+func extendedColorParams(fields []string, i int) int {
+	if i+1 >= len(fields) {
+		return 0
+	}
+	switch fields[i+1] {
+	case "5": // 5;N
+		return 2
+	case "2": // 2;R;G;B
+		return 4
+	}
+	return 0
+}
+
+func clearsBackground(seq string) bool {
+	params := seq[2 : len(seq)-1]
+	if params == "" {
+		return true // "ESC [ m" is a reset
+	}
+
+	cleared := false
+	fields := strings.Split(params, ";")
+	for i := 0; i < len(fields); i++ {
+		switch f := fields[i]; f {
+		case "0", "00":
+			cleared = true
+		case "49":
+			cleared = true
+		case "48":
+			// Extended background: 48;5;N or 48;2;R;G;B. Either way a
+			// background is being set, so skip its parameters.
+			cleared = false
+			i += extendedColorParams(fields, i)
+		case "38", "58":
+			// Extended foreground or underline color. Its parameters must be
+			// skipped too, or a value of "0" among them reads as a reset —
+			// which is exactly how 38;5;0 was mistaken for one.
+			i += extendedColorParams(fields, i)
+		default:
+			// 40-47 and 100-107 set one of the ANSI backgrounds.
+			if len(f) == 2 && f[0] == '4' && f[1] >= '0' && f[1] <= '7' {
+				cleared = false
+			}
+			if len(f) == 3 && f[0] == '1' && f[1] == '0' && f[2] >= '0' && f[2] <= '7' {
+				cleared = false
+			}
+		}
+	}
+	return cleared
+}
+
 func baseStyle() lipgloss.Style {
 	c := theme.Current().Colors
 	return lipgloss.NewStyle().
 		Foreground(c.Foreground).
-		Background(c.Background)
+		Background(c.Surface)
 }
 
-// panelStyle is the secondary/detail panel border (preview metadata,
-// empty states, etc.) — rounded, border-color accent.
+// panelStyle is the secondary/detail panel (preview metadata, empty states,
+// grid cards) — a lifted surface inside quiet chrome.
 func panelStyle() lipgloss.Style {
 	c := theme.Current().Colors
 	return baseStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(c.Border).
-		BorderBackground(c.Background).
+		BorderBackground(c.Surface).
 		Padding(1)
 }
 
 // primaryPanelStyle is the "focus-worthy" panel — the list where keystrokes
-// land. Its border is tinted with the accent color so the eye knows where
-// focus sits without reading any text.
+// land. Its border is a gradient sweep through the theme's two accent stops,
+// so focus reads instantly and from the shape of the color rather than from
+// any text. BorderForegroundBlend walks the blend around the perimeter, which
+// is why the corners resolve to different colors than the mid-edges.
 func primaryPanelStyle() lipgloss.Style {
 	c := theme.Current().Colors
 	return baseStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Accent).
-		BorderBackground(c.Background).
+		BorderForegroundBlend(c.GradientFrom, c.GradientTo).
+		BorderBackground(c.Surface).
 		Padding(1)
 }
 
+// previewPanelStyle wraps captured pane output. It sits on the same surface as
+// every other panel.
+//
+// Two other planes were tried here and both were wrong. A sunken Recessed plane
+// was meant to sell "a window onto another terminal"; the canvas plane was meant
+// to put foreign ANSI back on the ground the agent drew it against. Both made
+// the preview a different color from the detail panel directly above it, and a
+// panel that differs from its neighbour for reasons the eye cannot infer just
+// reads as a bug. Panels are panels: one surface.
 func previewPanelStyle() lipgloss.Style {
 	c := theme.Current().Colors
-	return baseStyle().
+	return lipgloss.NewStyle().
+		Foreground(c.Foreground).
+		Background(c.Surface).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Muted).
-		BorderBackground(c.Background).
+		BorderForeground(c.Border).
+		BorderBackground(c.Surface).
 		Padding(0, 1)
 }
 
@@ -180,18 +365,28 @@ func titleStyle() lipgloss.Style {
 		Bold(true)
 }
 
+// subtleStyle is the middle rung of the emphasis ladder — supporting values
+// that should read after the primary content but before the labels.
+func subtleStyle() lipgloss.Style {
+	c := theme.Current().Colors
+	return lipgloss.NewStyle().
+		Foreground(c.Subtle)
+}
+
 func mutedStyle() lipgloss.Style {
 	c := theme.Current().Colors
 	return lipgloss.NewStyle().
 		Foreground(c.Muted)
 }
 
+// dialogStyle is the floating plane. Its border takes the gradient too, which
+// is what visually ties a dialog to the focused panel it was summoned from.
 func dialogStyle() lipgloss.Style {
 	c := theme.Current().Colors
 	return lipgloss.NewStyle().
-		Background(c.Background).
+		Background(c.Overlay).
 		Foreground(c.Foreground).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(c.Primary).
-		BorderBackground(c.Background)
+		BorderForegroundBlend(c.GradientFrom, c.GradientTo).
+		BorderBackground(c.Overlay)
 }

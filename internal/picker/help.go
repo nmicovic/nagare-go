@@ -46,10 +46,10 @@ func helpBar(width int) string {
 
 	return lipgloss.NewStyle().
 		Foreground(c.Muted).
-		Background(c.Background).
+		Background(canvasBg()).
 		Width(width).
 		Padding(0, 1).
-		Render(bar)
+		Render(onPlane(bar, canvasBg()))
 }
 
 // helpOverlay renders the full help screen shown on F1.
@@ -116,5 +116,5 @@ func helpOverlay(width, height int) string {
 		Width(width*2/3).
 		Height(height*2/3).
 		Padding(2, 4).
-		Render(content)
+		Render(onPlane(content, c.Overlay))
 }

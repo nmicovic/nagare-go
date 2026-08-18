@@ -45,7 +45,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/popup` — popup notification TUI
 - `internal/session` — session creation + path resolution
 - `internal/newsession` — new session + quick prototype forms
-- `internal/theme` — 6 themes with AdaptiveColor, self-registering via init()
+- `internal/theme` — 13 themes on a derived design-token layer (see Themes), self-registering via init()
 - `internal/setup` — status reporting + MCP + slash command installation for every agent
 - `internal/mcp` — MCP server for inter-agent messaging, plus the CLI tool bridge
 - `internal/bin` — shared binary finder
@@ -175,10 +175,83 @@ Compatible with Python version. Same paths, same JSON schema:
 
 ## Themes
 
-6 themes with light/dark support (AdaptiveColor):
-tokyonight (default), catppuccin, dracula, gruvbox, monokai, nord
+13 themes with light/dark support: tokyonight (default), aura, catppuccin, dracula,
+flexoki, gruvbox, kanagawa, monokai, nord, onedark, onedarkpro, rosepine, vesper.
 
 Styles are functions (not cached) — theme switches take effect immediately.
+
+### Design tokens
+
+`theme.Colors` is a token layer: every color is named for the *role* it plays, and
+nothing outside `internal/theme` reaches for a raw hex value. Four groups —
+surfaces, text, accents, status — documented on the struct.
+
+A theme file declares only the palette it has an opinion about. `Register` runs
+`normalize`, which derives the rest, so a new theme is four lines of hex rather than
+fourteen and all 13 get the same sense of depth. An explicitly set token is never
+overwritten.
+
+Colors are `theme.Pair{Dark, Light}` rather than `compat.AdaptiveColor` so that
+derivation can run *per mode*: elevating a surface means something different on a
+`#1a1b26` canvas than on a `#d5d6db` one. `Pair` still satisfies `color.Color`, so
+lipgloss consumes it directly.
+
+Elevation steps HCL *lightness* rather than blending toward white, which is what
+keeps a lifted tokyonight panel blue-grey instead of drifting to grey. The derived
+values land within a few hex of the upstream palettes they imitate.
+
+### Depth planes
+
+Three planes, back to front, and choosing the wrong one is visible — a fill left on
+the canvas plane inside a panel punches a hole straight through it:
+
+| Token | Used for |
+|-------|----------|
+| `Background` | the canvas: the help bar and the gaps between grid cards |
+| `Surface` | **every** panel and everything inside one, so a panel reads as one lifted slab |
+| `Overlay` | dialogs, plus `Shadow` for what they cast |
+
+**Every panel gets `Surface` — including the preview.** Two other planes were tried
+for the preview well and both were wrong: a sunken `Recessed` tier to sell "a window
+onto another terminal", then the canvas plane to put foreign ANSI back on the ground
+the agent drew it against. Each argument is defensible in isolation and each looked
+like a bug, because the preview sat directly below the detail panel in a different
+color for a reason the eye cannot infer. Panels are panels. `Recessed` was removed
+from `theme.Colors` rather than left unused.
+
+Grid cards are uniform for the same reason: header, meta and preview all on the card
+surface.
+
+**Content entering a panel must be wrapped in `onPlane(content, plane)`.** A style
+that sets only a foreground ends its run with a full SGR reset, which clears the
+background for the rest of that line, and captured pane output is foreign ANSI that
+resets whenever it likes. Both leave cells on the terminal's own background. That was
+invisible while panels shared the terminal's background and became visible holes the
+moment panels were lifted onto their own plane. Wrapping content in an outer
+`Background` style is the bug, not the cure — the background has to be re-established
+after each reset, which is what `onPlane` does. It keeps any background the content
+brought with it, so a preview does not lose the agent's own highlighting.
+
+Grid view is the exception worth remembering: it composes straight onto the canvas —
+the cards *are* the panels — so its search bar and bottom padding must fill their own
+rows, and `onPlane` must not be run over card rows or it would inject the canvas
+inside them. `TestNoDefaultBackgroundCells` walks every cell of every view and fails
+on any left on the default background.
+
+Focus is carried by a gradient: `primaryPanelStyle` and the selected grid card use
+`BorderForegroundBlend(GradientFrom, GradientTo)`, which sweeps the blend around the
+border perimeter. Dialogs take the same gradient, which is what ties an overlay to
+the panel it was summoned from.
+
+Overlays are composited with lipgloss v2 `Layer`/`Compositor` (`placeOverlay`), not
+by splicing strings: layers carry real Z-order — ground, backdrop, shadow, dialog —
+and the same layer set can answer a mouse hit test later. `placeOverlay` clamps to
+the width and height it was passed; the shadow clamps to whatever room is left, so a
+dialog taller than the frame still casts to the side.
+
+Not adopted, deliberately: styled (curly) underlines. lipgloss v2 emits a separate
+SGR run per grapheme once one is set, which turned a 23-character status error into
+958 bytes.
 
 ## Conventions
 

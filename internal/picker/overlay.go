@@ -1,25 +1,33 @@
 package picker
 
-// Overlay placement based on the approach from
-// github.com/opencode-ai/opencode and lipgloss PR #102.
-
 import (
-	"strings"
+	"charm.land/lipgloss/v2"
 
-	"github.com/charmbracelet/x/ansi"
+	"github.com/nemke/nagare-go/internal/theme"
 )
 
-// placeOverlay renders fg centered on top of bg, preserving bg content around it.
-func placeOverlay(width, height int, fg, bg string) string {
-	fgLines, fgWidth := getLines(fg)
-	bgLines, _ := getLines(bg)
+// shadowOffset is how far down and to the right an overlay casts. One cell.
+// Two reads as a misaligned duplicate rather than a shadow, because terminal
+// cells are tall enough that a single row already carries the depth.
+const shadowOffset = 1
 
-	for len(bgLines) < height {
-		bgLines = append(bgLines, "")
+// placeOverlay draws fg centered on top of bg, preserving bg around it and
+// casting a shadow down-right of the dialog.
+//
+// This is built on lipgloss v2's compositor rather than by splicing strings:
+// layers carry real Z-order, so the ground, the backdrop, the shadow and the
+// dialog stack in a declared order instead of an implied one, and the same
+// layer set can answer a mouse hit test later. (The hand-rolled predecessor
+// here descended from opencode's and lipgloss PR #102's approach, which
+// predated the compositor existing.)
+func placeOverlay(width, height int, fg, bg string) string {
+	if width <= 0 || height <= 0 {
+		return bg
 	}
 
-	fgHeight := len(fgLines)
+	c := theme.Current().Colors
 
+	fgWidth, fgHeight := lipgloss.Width(fg), lipgloss.Height(fg)
 	x := (width - fgWidth) / 2
 	y := (height - fgHeight) / 2
 	if x < 0 {
@@ -29,56 +37,49 @@ func placeOverlay(width, height int, fg, bg string) string {
 		y = 0
 	}
 
-	var b strings.Builder
-	for i, bgLine := range bgLines {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		if i < y || i >= y+fgHeight {
-			b.WriteString(bgLine)
-			continue
-		}
+	// The ground layer pins the composite to exactly width×height. Without it
+	// the bounds come from bg, which is ragged — short lines and a missing
+	// final row both leave the shadow hanging off an edge that isn't there.
+	ground := lipgloss.NewStyle().
+		Background(canvasBg()).
+		Width(width).
+		Height(height).
+		Render("")
 
-		// Left portion of bg
-		pos := 0
-		if x > 0 {
-			left := ansi.Truncate(bgLine, x, "")
-			leftW := ansi.StringWidth(left)
-			b.WriteString(left)
-			pos = leftW
-			if pos < x {
-				b.WriteString(strings.Repeat(" ", x-pos))
-				pos = x
-			}
-		}
-
-		// Overlay content
-		fgLine := fgLines[i-y]
-		b.WriteString(fgLine)
-		pos += ansi.StringWidth(fgLine)
-
-		// Right portion of bg — use ansi.Cut to skip past the overlay region
-		bgW := ansi.StringWidth(bgLine)
-		right := ansi.Cut(bgLine, pos, bgW)
-		rightW := ansi.StringWidth(right)
-
-		// Fill gap between fg end and right bg start
-		if gap := bgW - rightW - pos; gap > 0 {
-			b.WriteString(strings.Repeat(" ", gap))
-		}
-		b.WriteString(right)
+	layers := []*lipgloss.Layer{
+		lipgloss.NewLayer(ground).ID("ground").X(0).Y(0).Z(0),
+		lipgloss.NewLayer(bg).ID("backdrop").X(0).Y(0).Z(1),
 	}
 
-	return b.String()
-}
-
-func getLines(s string) ([]string, int) {
-	lines := strings.Split(s, "\n")
-	widest := 0
-	for _, l := range lines {
-		if w := ansi.StringWidth(l); w > widest {
-			widest = w
-		}
+	// A solid block offset behind the dialog: the dialog covers all of it but
+	// the rim, which is the shadow.
+	//
+	// It is clamped to the room actually left rather than skipped when it
+	// doesn't fit, so a dialog taller than the frame — the help screen, on a
+	// short terminal — still casts to the right instead of losing its shadow
+	// entirely. The clamp is not optional: a layer extending past the
+	// compositor's bounds widens the composite, and the surplus columns then
+	// get clipped off the *opposite* edge by the frame clamp in View().
+	shadowWidth := min(fgWidth, width-x-shadowOffset)
+	shadowHeight := min(fgHeight, height-y-shadowOffset)
+	if shadowWidth > 0 && shadowHeight > 0 {
+		shadow := lipgloss.NewStyle().
+			Background(c.Shadow).
+			Width(shadowWidth).
+			Height(shadowHeight).
+			Render("")
+		layers = append(layers,
+			lipgloss.NewLayer(shadow).ID("shadow").X(x+shadowOffset).Y(y+shadowOffset).Z(2))
 	}
-	return lines, widest
+
+	layers = append(layers, lipgloss.NewLayer(fg).ID("dialog").X(x).Y(y).Z(3))
+
+	frame := lipgloss.NewCompositor(layers...).Render()
+
+	// The compositor's bounds grow to fit their layers, so a dialog larger than
+	// the frame — the help screen on a short terminal — would hand back a
+	// composite bigger than the size we were asked for, and every row would
+	// wrap. Clamping here makes the function honor its own signature instead of
+	// relying on the caller to clean up after it.
+	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(frame)
 }

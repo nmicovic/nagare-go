@@ -1,2 +1,9 @@
 nagare-go
 .crush/
+
+# Test binaries and profile output. `go test -cpuprofile` leaves the compiled
+# test binary in the working directory, which is how an 8MB picker.test once got
+# committed.
+*.test
+*.out
+*.prof

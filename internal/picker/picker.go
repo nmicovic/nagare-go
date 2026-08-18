@@ -472,12 +472,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() tea.View {
 	content, hits := m.view()
-	// Last line of defense. Every panel is already pinned with fitBox, but a
-	// frame even one row too tall scrolls the alt screen and smears the whole
-	// UI, so clamp the assembled frame rather than trusting the arithmetic.
-	if m.width > 0 && m.height > 0 {
-		content = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content)
-	}
+	content = clampHeight(content, m.height)
 	v := tea.NewView(content)
 	v.AltScreen = true
 
@@ -500,6 +495,30 @@ func (m Model) View() tea.View {
 		}
 	}
 	return v
+}
+
+// clampHeight drops any rows past the terminal's last line. A frame even one row
+// too tall scrolls the alt screen and smears the whole UI.
+//
+// The width half of this guard used to live here too, as a MaxWidth Render over
+// the assembled frame — and it cost 18% of every frame, because Render measures
+// each line with full grapheme segmentation. It is not needed: every panel is
+// pinned by fitBox, grid rows and the help bar are rendered at an explicit width,
+// and placeOverlay clamps itself, so the invariant is established where content is
+// built rather than patched up at the end. TestFrameIsExactlyTerminalSized asserts
+// it across view modes, session counts and terminal sizes.
+//
+// Height stays because it is nearly free: dropping trailing lines needs no
+// measurement at all.
+func clampHeight(content string, height int) string {
+	if height <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= height {
+		return content
+	}
+	return strings.Join(lines[:height], "\n")
 }
 
 func (m Model) view() (string, hitTargets) {
@@ -1465,13 +1484,30 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 
 		i := row.SessionIdx
 		s := m.filtered[i]
-		dot := statusDot(s.Status, m.pulseOn)
+		// Selection: tint the row background (crush / lazygit / gh-dash
+		// convention) — no caret or gutter rune. The tint colour is per-theme
+		// (SelBg), so every theme controls exactly how loud its selection reads.
+		//
+		// Every segment below carries this background itself. That is not a style
+		// choice: each segment's own styling ends with a full SGR reset, so a
+		// background applied around the finished row would survive only as far as
+		// the first reset. Applying it per segment used to be done by wrapping
+		// each one in a second Render, which both cost nine extra Render calls a
+		// row and still left a gap — the name and branch were rendered without it,
+		// so the selection tint broke either side of the name.
+		rowBg := c.Surface
+		if i == m.cursor {
+			rowBg = c.SelBg
+		}
+		bg := lipgloss.NewStyle().Background(rowBg)
+
+		dot := statusDotOn(s.Status, m.pulseOn, rowBg)
 
 		star := ""
 		if m.isStarred(s.Name) {
 			star = "★ "
 		}
-		starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
+		starStyled := bg.Foreground(c.Warning).Render(star)
 
 		// Row layout: a left cluster (status dot + name) and a right cluster
 		// (star + agent badge) pinned to the right edge. Right-aligning the
@@ -1508,23 +1544,18 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		} else {
 			branch = ""
 		}
-		branchStyled := mutedStyle().Render(branch)
+		branchStyled := bg.Foreground(c.Muted).Render(branch)
 
-		// Selection: tint the row background (crush / lazygit / gh-dash
-		// convention) — no caret or gutter rune. Bold the text for an
-		// extra hierarchy cue. The tint color is per-theme (SelBg), so
-		// every theme controls exactly how loud its selection reads.
-		rowBg := c.Surface
-		nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
+		// Bold the selected row's name for an extra hierarchy cue beyond the tint.
+		nameStyle := bg.Foreground(c.Foreground)
 		if i == m.cursor {
-			rowBg = c.SelBg
-			nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
+			nameStyle = nameStyle.Bold(true)
 		}
 		// Highlight matches against the label actually shown: a query that only
 		// hit the repo portion has nothing to mark on the child, and the header
 		// above carries that text.
 		nameStyled := renderNameWithMatches(name, row.Label, m.query(), nameStyle, c.Accent)
-		prefixStyled := mutedStyle().Render(prefix)
+		prefixStyled := bg.Foreground(c.Muted).Render(prefix)
 
 		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) -
 			lipgloss.Width(nameStyled) - lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
@@ -1532,19 +1563,13 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 			gap = 1
 		}
 
-		// Each segment carries the row background itself. Wrapping the finished
-		// string in one background style does not work: every inner style ends
-		// with a full reset, which clears the background for everything after
-		// it — leaving the tint on only the first and last column.
-		bg := lipgloss.NewStyle().Background(rowBg)
-		var content strings.Builder
-		for _, part := range []string{
-			" ", dot, " ", prefixStyled, nameStyled,
-			strings.Repeat(" ", gap), starStyled, branchStyled, strings.Repeat(" ", rowGutter),
-		} {
-			content.WriteString(bg.Render(part))
-		}
-		lines = append(lines, bg.Width(width).Render(content.String()))
+		// Every segment already carries rowBg, so the row is assembled by plain
+		// concatenation and padded once. onPlane re-establishes the tint after the
+		// resets the segments leave behind.
+		line := " " + dot + " " + prefixStyled + nameStyled +
+			strings.Repeat(" ", gap) + starStyled + branchStyled +
+			strings.Repeat(" ", rowGutter)
+		lines = append(lines, bg.Width(width).Render(onPlane(line, rowBg)))
 	}
 	return strings.Join(lines, "\n"), rowAt
 }

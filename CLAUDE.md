@@ -266,11 +266,41 @@ transient frames cost ~32ms. This is why the status-dot pulse stays a 1Hz Faint
 toggle instead of breathing smoothly, and why any future always-on animation needs
 the render path made cheaper first.
 
-Where the time goes, if that is ever worth doing: `lipgloss.Style.Render` is 67% of
-a frame and `ansi.stringWidth` inside it is 42%, because hot loops call Render per
-cell or per rune (`fadingRule`, `renderNameWithMatches`, the nine per-row
-background segments) and each call re-does grapheme segmentation. The whole-frame
-`MaxWidth`/`MaxHeight` clamp in `View` is another 21% on its own.
+Those figures are after one optimisation pass; `internal/picker/bench_test.go`
+keeps them measurable. What that pass did, and what is left:
+
+- `fadingRule` wrote one `Style.Render` per cell. Render re-measures its input with
+  full grapheme segmentation, which for a one-cell string is pure overhead, and a
+  rule can be 200 cells wide several times a frame. It now emits SGR directly via
+  `fgSeq`. Help overlay: 1.89ms → 1.30ms.
+- `renderNameWithMatches` rendered per *rune*. It now batches into runs, since a
+  fuzzy match is a handful of runs, not a rune-length list. Filtered list: 4.97ms →
+  3.84ms.
+- Row segments were each wrapped in a second `Render` purely to carry the row
+  background — nine calls a row. Each segment now sets its own background, and the
+  row is plain concatenation.
+- The whole-frame `MaxWidth`/`MaxHeight` clamp in `View` was 18% of a frame by
+  itself. Only the height half survives (`clampHeight`, which needs no
+  measurement); width is established where content is built and asserted by
+  `TestFrameIsExactlyTerminalSized`.
+
+Net: **4.69ms → 3.39ms** at 30 sessions on 200x50, 6.60ms → 4.71ms in grid view,
+4.97ms → 2.98ms filtered. Still not enough for an always-on 30fps clock at 30
+sessions (10% of a core). The remaining cost is structural: `Style.Render` is 60%
+of a frame and `stringWidth` 41%, nearly all of it the per-panel `fitBox` Render
+measuring an entire panel to pin it. Going further means composing panels manually
+— padding each line to width and drawing borders ourselves — which is a much larger
+and riskier change than any of the above.
+
+Verify a rendering change did not alter output before trusting a speedup:
+`frameFingerprint` in `render_test.go` hashes the *cell attributes* of a frame
+(character plus every colour and style in effect), so it is insensitive to how the
+escape sequences are arranged but catches any visible difference. Both of the first
+two optimisations above were confirmed cell-identical that way; the third was not,
+and the difference turned out to be a latent bug it exposed — the selected row's
+tint broke either side of the name, because the name and branch were rendered
+without the row background and `onPlane` then filled the gap with the panel surface
+instead. Fixed by giving every segment the row background explicitly.
 
 Overlay entry is started centrally, by `Update` noticing that no overlay was open
 before a keypress and one is open after, so a new overlay cannot forget to animate.

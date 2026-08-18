@@ -226,3 +226,43 @@ func TestDetailPanelIsAClosedBox(t *testing.T) {
 		}
 	}
 }
+
+// TestFrameIsExactlyTerminalSized is what replaced the whole-frame MaxWidth clamp
+// in View, which cost 18% of every frame because Render measures each line with
+// full grapheme segmentation.
+//
+// The invariant it guards is that width is established where content is built —
+// fitBox pins each panel, grid rows and the help bar render at an explicit width,
+// placeOverlay clamps itself — rather than being patched up at the end. If a panel
+// ever renders wider than its budget the terminal wraps it and the UI smears, so
+// this covers both view modes across a spread of sizes and session counts.
+func TestFrameIsExactlyTerminalSized(t *testing.T) {
+	sizes := [][2]int{{207, 60}, {200, 50}, {160, 40}, {120, 30}, {90, 24}, {70, 20}, {60, 16}}
+	for _, grid := range []bool{false, true} {
+		for _, count := range []int{0, 1, 3, 9, 30} {
+			for _, sz := range sizes {
+				w, h := sz[0], sz[1]
+				name := fmt.Sprintf("list/%d/%dx%d", count, w, h)
+				if grid {
+					name = fmt.Sprintf("grid/%d/%dx%d", count, w, h)
+				}
+				t.Run(name, func(t *testing.T) {
+					m := gridModel(t, w, h, longSessions(count))
+					if !grid {
+						m.viewMode = ListView
+					}
+					frame := m.View().Content
+					rows := strings.Split(frame, "\n")
+					if len(rows) > h {
+						t.Fatalf("frame has %d rows, more than the %d available", len(rows), h)
+					}
+					for i, row := range rows {
+						if got := ansi.StringWidth(row); got != w {
+							t.Errorf("row %d is %d cells wide, want exactly %d", i, got, w)
+						}
+					}
+				})
+			}
+		}
+	}
+}

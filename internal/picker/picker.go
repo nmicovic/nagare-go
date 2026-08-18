@@ -104,8 +104,10 @@ type Model struct {
 	lastQuery     string   // previous search query, to detect query changes in applyFilter
 	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
 	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
-	pulseOn       bool     // 1Hz toggle used to breathe the status dot on running/waiting sessions
-	testNoScan    bool     // test hook: disable the live tmux scanner (see export_test.go)
+	animEnabled   bool     // spring-animated overlay entry (config: picker.animations)
+	overlayAnim   overlayAnim
+	pulseOn       bool // 1Hz toggle used to breathe the status dot on running/waiting sessions
+	testNoScan    bool // test hook: disable the live tmux scanner (see export_test.go)
 }
 
 // New creates a new picker model with default settings.
@@ -129,6 +131,8 @@ func New() Model {
 		searchInput:  ti,
 		showHelpBar:  cfg.Picker.ShowHelpBar,
 		mouseEnabled: cfg.Picker.Mouse,
+		animEnabled:  cfg.Picker.Animations,
+		overlayAnim:  newOverlayAnim(),
 		registry:     state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput:  pi,
 		workCache:    make(map[string]git.Work),
@@ -410,8 +414,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pulseOn = !m.pulseOn
 		return m, doPulseTick()
 
+	case tickAnimMsg:
+		if !m.overlayAnim.step() {
+			return m, nil
+		}
+		return m, doAnimTick()
+
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		wasOpen := m.overlayOpen()
+		next, cmd := m.handleKey(msg)
+		updated, ok := next.(Model)
+		if !ok {
+			return next, cmd
+		}
+		// Catching the transition here, rather than at each of the four places an
+		// overlay opens, means a fifth one cannot forget to animate.
+		if updated.animEnabled && !wasOpen && updated.overlayOpen() {
+			updated.overlayAnim.start()
+			return updated, tea.Batch(cmd, doAnimTick())
+		}
+		if !updated.overlayOpen() {
+			updated.overlayAnim.stop()
+		}
+		return updated, cmd
 
 	case editorDoneMsg:
 		defer os.Remove(msg.path)
@@ -532,9 +557,12 @@ func (m Model) view() (string, hitTargets) {
 		overlay = m.renderConfirmOverlay()
 	}
 	if overlay != "" {
-		hits.dialog = overlayRect(m.width, m.height, overlay)
+		dy := m.overlayAnim.offset()
+		// Bounds come from the same offset the frame is drawn with, so a click
+		// lands on the dialog where it currently appears, not where it will rest.
+		hits.dialog = overlayRect(m.width, m.height, overlay, dy)
 		hits.dismissable = dismissable
-		return placeOverlay(m.width, m.height, overlay, base), hits
+		return placeOverlay(m.width, m.height, overlay, base, dy), hits
 	}
 
 	return base, hits

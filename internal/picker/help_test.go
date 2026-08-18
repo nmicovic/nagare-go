@@ -224,3 +224,91 @@ func TestFooterHandlesAnEmptyList(t *testing.T) {
 		t.Errorf("footer with an empty list is %d lines, want 1", got)
 	}
 }
+
+// TestHelpOverlayFitsTheFrame guards the bug the animation work uncovered: the
+// single-column screen ran to ~44 rows and was silently clipped on any shorter
+// terminal. It also pinned the dialog's centered position to the top of the frame,
+// which defeated the entry animation.
+func TestHelpOverlayFitsTheFrame(t *testing.T) {
+	for _, sz := range [][2]int{{200, 50}, {160, 40}, {120, 36}, {120, 30}, {100, 24}, {80, 22}} {
+		w, h := sz[0], sz[1]
+		o := helpOverlay(w, h)
+		if got := lipgloss.Height(o); got > h {
+			t.Errorf("%dx%d: help overlay is %d rows, taller than the frame", w, h, got)
+		}
+		if got := lipgloss.Width(o); got > w {
+			t.Errorf("%dx%d: help overlay is %d cells wide, wider than the frame", w, h, got)
+		}
+	}
+}
+
+// TestHelpOverlayIsCenteredNotPinned — an overlay taller than the frame clamps to
+// y=0, so this is what proves the fit is real rather than incidental.
+func TestHelpOverlayIsCenteredNotPinned(t *testing.T) {
+	const w, h = 160, 40
+	area := overlayRect(w, h, helpOverlay(w, h), 0)
+	if area.Min.Y <= 0 {
+		t.Errorf("help overlay rests at y=%d; it is not being centered", area.Min.Y)
+	}
+}
+
+// TestHelpOverlayCollapsesToOneColumn — a narrow dialog cannot hold two columns
+// of key/description pairs without shredding the descriptions.
+func TestHelpOverlayCollapsesToOneColumn(t *testing.T) {
+	wide := ansi.Strip(helpOverlay(200, 60))
+	narrow := ansi.Strip(helpOverlay(80, 60))
+
+	// In two columns, a left-hand and a right-hand section title share a row.
+	if !strings.Contains(wide, "Navigation") || !strings.Contains(wide, "Agent") {
+		t.Fatal("wide help overlay is missing expected sections")
+	}
+	twoOnALine := false
+	for _, line := range strings.Split(wide, "\n") {
+		if strings.Contains(line, "Navigation") && strings.Contains(line, "Agent") {
+			twoOnALine = true
+		}
+	}
+	if !twoOnALine {
+		t.Error("wide help overlay did not lay out two columns")
+	}
+
+	for _, line := range strings.Split(narrow, "\n") {
+		if strings.Contains(line, "Navigation") && strings.Contains(line, "Agent") {
+			t.Error("narrow help overlay still laid out two columns")
+		}
+	}
+}
+
+// TestHelpOverlayCoversEveryBinding — the screen is the full reference the footer
+// defers to, so a binding that exists in keys.go and is not listed here is
+// undiscoverable.
+func TestHelpOverlayCoversEveryBinding(t *testing.T) {
+	text := ansi.Strip(helpOverlay(200, 60))
+
+	// Rendered spelling for each binding constant.
+	want := map[string]string{
+		keyApprove:       "Ctrl+y",
+		keyApproveAlways: "Ctrl+a",
+		keyToggleView:    "Tab",
+		keyCycleTheme:    "Ctrl+t",
+		keyHelp:          "F1",
+		keyUnload:        "Ctrl+w",
+		keyKillSession:   "Ctrl+x",
+		keyStar:          "Ctrl+f",
+		keyCycleSort:     "Ctrl+o",
+		keyRename:        "F2",
+		keyNewWorktree:   "F3",
+		keyNewSession:    "Ctrl+n",
+		keyQuickProto:    "Ctrl+r",
+		keyInlinePrompt:  "Ctrl+l",
+		keyEditPrompt:    "Ctrl+g",
+		keyEditConfig:    "Ctrl+e",
+		keyToggleSaved:   "Ctrl+s",
+		keyNextAttention: "F4",
+	}
+	for binding, shown := range want {
+		if !strings.Contains(text, shown) {
+			t.Errorf("help screen does not document %s (expected to see %q)", binding, shown)
+		}
+	}
+}

@@ -73,7 +73,7 @@ func testDialog() string {
 // smears the UI, and one column too wide wraps every row.
 func TestOverlayIsExactlyFrameSized(t *testing.T) {
 	const w, h = 80, 24
-	out := placeOverlay(w, h, testDialog(), testBackdrop(w, h))
+	out := placeOverlay(w, h, testDialog(), testBackdrop(w, h), 0)
 
 	lines, width := frameSize(out)
 	if lines != h {
@@ -89,7 +89,7 @@ func TestOverlayIsExactlyFrameSized(t *testing.T) {
 // flattening the dialog back onto the backdrop.
 func TestOverlayCastsShadow(t *testing.T) {
 	const w, h = 80, 24
-	out := placeOverlay(w, h, testDialog(), testBackdrop(w, h))
+	out := placeOverlay(w, h, testDialog(), testBackdrop(w, h), 0)
 
 	shadow := bgSGR(theme.Current().Colors.Shadow)
 	if !strings.Contains(out, shadow) {
@@ -105,7 +105,7 @@ func TestOverlayShadowClampedAtEdges(t *testing.T) {
 	// Deliberately larger than the frame in both dimensions.
 	oversized := dialogStyle().Width(w + 10).Height(h + 6).Render("too big")
 
-	out := placeOverlay(w, h, oversized, testBackdrop(w, h))
+	out := placeOverlay(w, h, oversized, testBackdrop(w, h), 0)
 
 	lines, width := frameSize(out)
 	if lines != h {
@@ -120,7 +120,7 @@ func TestOverlayShadowClampedAtEdges(t *testing.T) {
 // arrives, and a zero-size compositor must not panic or invent a frame.
 func TestOverlayZeroSizeIsSafe(t *testing.T) {
 	bg := "backdrop"
-	if got := placeOverlay(0, 0, testDialog(), bg); got != bg {
+	if got := placeOverlay(0, 0, testDialog(), bg, 0); got != bg {
 		t.Errorf("zero-size overlay = %q, want the backdrop unchanged", got)
 	}
 }

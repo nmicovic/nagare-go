@@ -34,6 +34,7 @@ type PickerConfig struct {
 	GridRefreshInterval float64 `toml:"grid_refresh_interval"`
 	ShowHelpBar         bool    `toml:"show_help_bar"`
 	Mouse               bool    `toml:"mouse"`
+	Animations          bool    `toml:"animations"`
 }
 
 // AppearanceConfig controls visual settings.
@@ -79,6 +80,7 @@ func Default() NagareConfig {
 			GridRefreshInterval: 0.5,
 			ShowHelpBar:         true,
 			Mouse:               true,
+			Animations:          true,
 		},
 		Appearance: AppearanceConfig{
 			Theme:     "tokyonight",

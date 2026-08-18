@@ -22,14 +22,14 @@ const shadowOffset = 1
 // layer set can answer a mouse hit test later. (The hand-rolled predecessor
 // here descended from opencode's and lipgloss PR #102's approach, which
 // predated the compositor existing.)
-func placeOverlay(width, height int, fg, bg string) string {
+func placeOverlay(width, height int, fg, bg string, dy int) string {
 	if width <= 0 || height <= 0 {
 		return bg
 	}
 
 	c := theme.Current().Colors
 
-	area := overlayRect(width, height, fg)
+	area := overlayRect(width, height, fg, dy)
 	x, y := area.Min.X, area.Min.Y
 	fgWidth, fgHeight := area.Dx(), area.Dy()
 
@@ -85,9 +85,11 @@ func placeOverlay(width, height int, fg, bg string) string {
 //
 // Hit-testing and drawing both go through this, so a dialog's clickable bounds
 // cannot drift away from where it was actually painted.
-func overlayRect(width, height int, fg string) image.Rectangle {
+// dy displaces it vertically, which is how the entry animation is expressed;
+// zero is the resting position.
+func overlayRect(width, height int, fg string, dy int) image.Rectangle {
 	fgWidth, fgHeight := lipgloss.Width(fg), lipgloss.Height(fg)
 	x := max((width-fgWidth)/2, 0)
-	y := max((height-fgHeight)/2, 0)
+	y := max((height-fgHeight)/2+dy, 0)
 	return image.Rect(x, y, x+fgWidth, y+fgHeight)
 }

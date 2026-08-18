@@ -180,6 +180,42 @@ The footer shows only the keys valid for the current mode and selection, trimmed
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
 
+### Animation
+
+Overlays rise into place on a harmonica spring (`internal/picker/anim.go`), ~233ms
+over 8 frames at 30fps. Off with `picker.animations = false`. The spring stops as
+soon as its offset *rounds* to zero — a terminal has no sub-cell vertical
+positioning, so stepping past that point re-renders identical frames; the first
+tuning wasted 6 such frames out of 18.
+
+The animation clock only runs while something is moving, and that is not
+negotiable: a frame costs **1.8–5.4 ms** to assemble (measured — 1.8ms at 8
+sessions/120x30, 4.3ms at 30 sessions/200x50, 5.4ms in grid view), so a continuous
+30fps clock would burn 5–15% of a core for as long as the picker is open. Eight
+transient frames cost ~32ms. This is why the status-dot pulse stays a 1Hz Faint
+toggle instead of breathing smoothly, and why any future always-on animation needs
+the render path made cheaper first.
+
+Where the time goes, if that is ever worth doing: `lipgloss.Style.Render` is 67% of
+a frame and `ansi.stringWidth` inside it is 42%, because hot loops call Render per
+cell or per rune (`fadingRule`, `renderNameWithMatches`, the nine per-row
+background segments) and each call re-does grapheme segmentation. The whole-frame
+`MaxWidth`/`MaxHeight` clamp in `View` is another 21% on its own.
+
+Overlay entry is started centrally, by `Update` noticing that no overlay was open
+before a keypress and one is open after, so a new overlay cannot forget to animate.
+`overlayRect` and `placeOverlay` both take the animated offset, so a click lands on
+the dialog where it currently appears rather than where it will rest.
+
+### Help overlay
+
+Two columns, sized to its content and capped to the frame, not to a fraction of the
+terminal. The single-column version ran to ~44 rows: it overflowed the box on any
+shorter terminal and was silently clipped, and because an oversized dialog's
+centered position clamps to y=0 it also defeated the entry animation.
+`TestHelpOverlayCoversEveryBinding` checks every constant in `keys.go` is
+documented, since the footer defers to this screen.
+
 ## State Files
 
 Compatible with Python version. Same paths, same JSON schema:

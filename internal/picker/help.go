@@ -147,75 +147,127 @@ func helpBar(m Model, width int) string {
 		Render(onPlane(strings.Join(parts, sep), canvasBg()))
 }
 
+// helpSection is a titled group of key bindings on the F1 screen.
+type helpSection struct {
+	title string
+	lines [][2]string // key, description; an empty key is a continuation note
+}
+
+// helpColumns splits the bindings into two groups of roughly equal height, so the
+// screen can be laid out side by side. Actions is on its own because it is longer
+// than everything else combined.
+func helpColumns() ([]helpSection, []helpSection) {
+	left := []helpSection{
+		{"Navigation", [][2]string{
+			{"↑ / ↓", "Move cursor up/down"},
+			{"← / →", "Move cursor (grid view)"},
+			{"Enter", "Jump to selection"},
+			{"F4", "Next session waiting on you"},
+			{"Esc", "Quit nagare"},
+		}},
+		{"Views", [][2]string{
+			{"Tab", "Toggle list / grid view"},
+			{"Ctrl+t", "Pick a color theme"},
+			{"Ctrl+s", "Show saved sessions"},
+			{"F1", "Toggle this screen"},
+		}},
+		{"Search", [][2]string{
+			{"Type", "Fuzzy match name or path"},
+			{"", "Best match is auto-selected"},
+		}},
+		{"Mouse", [][2]string{
+			{"Click", "Select; click again to jump"},
+			{"Wheel", "Move the selection"},
+			{"Click away", "Close this screen"},
+			{"", "Off: picker.mouse = false"},
+		}},
+	}
+	right := []helpSection{
+		{"Agent", [][2]string{
+			{"Ctrl+y", "Approve permission"},
+			{"Ctrl+a", "Approve always"},
+			{"Ctrl+l", "Send inline prompt"},
+			{"Ctrl+g", "Send prompt via $EDITOR"},
+		}},
+		{"Sessions", [][2]string{
+			{"Ctrl+n", "Create new session"},
+			{"Ctrl+r", "Quick prototype"},
+			{"F2", "Rename session"},
+			{"F3", "New git worktree"},
+			{"Ctrl+f", "Toggle star"},
+			{"Ctrl+o", "Cycle sort mode"},
+		}},
+		{"Teardown", [][2]string{
+			{"Ctrl+w", "Unload agent (kill pane)"},
+			{"Ctrl+x", "Kill window"},
+			{"", "Offers worktree removal"},
+		}},
+		{"Config", [][2]string{
+			{"Ctrl+e", "Edit config file"},
+		}},
+	}
+	return left, right
+}
+
 // helpOverlay renders the full help screen shown on F1.
+//
+// Two columns, and sized to its content rather than to a fraction of the
+// terminal. A single column ran to some 44 rows, which overflowed the box on any
+// terminal shorter than that and got silently clipped — and because an oversized
+// dialog's centered position clamps to the top of the frame, it also defeated the
+// entry animation.
 func helpOverlay(width, height int) string {
 	c := theme.Current().Colors
 
-	// Inner width after the outer dialog's border (2 cols) and padding
-	// (2*4 horizontal). Section fill lines match that width.
-	innerWidth := width*2/3 - 10
-
-	title := sectionHeader("Keyboard Shortcuts", innerWidth)
-
-	section := func(name string) string {
-		return "\n" + sectionHeader(name, innerWidth) + "\n"
+	// Dialog width, then the content width inside border (2) and padding (2*3).
+	boxWidth := min(width*3/4, 94)
+	innerWidth := boxWidth - 8
+	columns := 2
+	if innerWidth < 68 {
+		columns = 1
+	}
+	colWidth := innerWidth
+	if columns == 2 {
+		colWidth = (innerWidth - 2) / 2
 	}
 
-	key := func(k string) string {
-		return lipgloss.NewStyle().Foreground(c.Accent).Width(14).Render(k)
+	keyStyle := lipgloss.NewStyle().Foreground(c.Accent).Width(11)
+	descStyle := lipgloss.NewStyle().Foreground(c.Foreground)
+
+	renderSections := func(sections []helpSection, first bool) string {
+		var out []string
+		for i, sec := range sections {
+			if i > 0 || !first {
+				out = append(out, "")
+			}
+			out = append(out, sectionHeader(sec.title, colWidth))
+			for _, l := range sec.lines {
+				out = append(out, fmt.Sprintf("%s %s",
+					keyStyle.Render(l[0]), descStyle.Render(l[1])))
+			}
+		}
+		return lipgloss.NewStyle().Width(colWidth).Render(strings.Join(out, "\n"))
 	}
 
-	desc := func(d string) string {
-		return lipgloss.NewStyle().Foreground(c.Foreground).Render(d)
+	left, right := helpColumns()
+
+	var body string
+	if columns == 2 {
+		gap := lipgloss.NewStyle().Width(2).Render("")
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			renderSections(left, true), gap, renderSections(right, true))
+	} else {
+		body = renderSections(append(left, right...), true)
 	}
 
-	line := func(k, d string) string {
-		return fmt.Sprintf("  %s %s", key(k), desc(d))
-	}
-
-	content := strings.Join([]string{
-		title,
-		section("Navigation"),
-		line("↑ / ↓", "Move cursor up/down"),
-		line("← / →", "Move cursor left/right (grid view)"),
-		line("Enter", "Jump to selected session"),
-		line("Esc", "Quit nagare"),
-		section("Views"),
-		line("Tab", "Toggle list / grid view"),
-		line("Ctrl+t", "Cycle color theme"),
-		line("F1", "Toggle this help screen"),
-		section("Actions"),
-		line("F4", "Jump to the next session waiting on you"),
-		line("Ctrl+y", "Approve permission (waiting sessions)"),
-		line("Ctrl+a", "Approve always (waiting sessions)"),
-		line("Ctrl+f", "Toggle star/favorite"),
-		line("Ctrl+o", "Cycle sort mode (status/name/agent)"),
-		line("Enter", "Jump to session / Load saved session"),
-		line("Ctrl+s", "Toggle saved (unloaded) sessions"),
-		line("Ctrl+w", "Unload agent (kill pane)"),
-		line("Ctrl+x", "Kill this pane's window, or the session if it is the only one"),
-		line("F2", "Rename session"),
-		line("F3", "New git worktree for this repo"),
-		line("Ctrl+n", "Create new session"),
-		line("Ctrl+r", "Quick prototype"),
-		line("Ctrl+l", "Send inline prompt to session"),
-		line("Ctrl+g", "Send prompt via $EDITOR"),
-		line("Ctrl+e", "Edit config file"),
-		section("Search"),
-		line("Type", "Fuzzy search by session name or path"),
-		line("", "Best match is auto-selected"),
-		section("Mouse"),
-		line("Click", "Select a session; click it again to jump"),
-		line("Wheel", "Move the selection"),
-		line("Click away", "Close this screen or the theme picker"),
-		line("", "Disable with picker.mouse = false in the config"),
-		"",
-		mutedStyle().Render("  Press F1 or Esc to close"),
-	}, "\n")
+	content := sectionHeader("Keyboard Shortcuts", innerWidth) + "\n\n" + body +
+		"\n\n" + mutedStyle().Render("Press F1 or Esc to close")
 
 	return dialogStyle().
-		Width(width*2/3).
-		Height(height*2/3).
-		Padding(2, 4).
+		Width(boxWidth).
+		// No fixed height: the box takes the height its content needs, capped so
+		// it can never exceed the frame it will be centered in.
+		MaxHeight(height-2).
+		Padding(1, 3).
 		Render(onPlane(content, c.Overlay))
 }

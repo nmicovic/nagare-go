@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/harmonica"
+
+	"github.com/nemke/nagare-go/internal/models"
 )
 
 // Overlay entry animation.
@@ -33,6 +35,61 @@ const (
 	// spent invisible.
 	animRestVel = 6.0
 )
+
+// The breathing clock.
+//
+// Status dots on running and waiting sessions breathe: their colour walks toward
+// the panel behind them and back. A terminal has no opacity, so interpolating the
+// colour is what a fade is here.
+//
+// It is deliberately slow, and that is what makes it affordable. A frame costs a
+// few milliseconds to assemble, so a 30fps clock is out of the question — but a
+// breath lasting a couple of seconds needs nothing like 30 samples to look smooth,
+// because the colour moves so little between frames. At 10fps a 30-session frame
+// costs about 3% of a core, and the motion still reads as continuous.
+const (
+	breathFPS = 10
+	// breathPeriod is one full breath. Slow enough to read as alive rather than as
+	// a blinking cursor demanding attention.
+	breathPeriod = 2200 * time.Millisecond
+	// breathDepth is how far the dot fades toward its background at the trough.
+	// Past about half it stops reading as the status colour at all.
+	breathDepth = 0.5
+)
+
+type tickBreathMsg struct{}
+
+func doBreathTick() tea.Cmd {
+	return tea.Tick(time.Second/breathFPS, func(time.Time) tea.Msg { return tickBreathMsg{} })
+}
+
+// breathStep advances the phase by one frame, wrapping at a full cycle.
+func breathStep(phase float64) float64 {
+	return math.Mod(phase+float64(time.Second/breathFPS)/float64(breathPeriod), 1)
+}
+
+// breathFactor converts a phase into a 0..1 fade amount, easing at both ends so
+// the dot settles at its brightest and dimmest rather than snapping through them.
+func breathFactor(phase float64) float64 {
+	return (1 - math.Cos(2*math.Pi*phase)) / 2
+}
+
+// breathes reports whether a status is one that should animate. Idle, dead and
+// saved sessions hold still: motion is the signal that something is happening.
+func breathes(status models.SessionStatus) bool {
+	return status == models.StatusRunning || status == models.StatusWaitingInput
+}
+
+// needsBreathing reports whether any visible session is animating, so the clock
+// can stop entirely when the whole list is idle.
+func needsBreathing(sessions []models.Session) bool {
+	for _, s := range sessions {
+		if breathes(s.Status) {
+			return true
+		}
+	}
+	return false
+}
 
 // tickAnimMsg advances any running animation.
 type tickAnimMsg struct{}

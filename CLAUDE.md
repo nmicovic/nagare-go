@@ -252,11 +252,40 @@ covers the arithmetic feeding through to the whole frame.
 
 ### Animation
 
-Overlays rise into place on a harmonica spring (`internal/picker/anim.go`), ~233ms
-over 8 frames at 30fps. Off with `picker.animations = false`. The spring stops as
-soon as its offset *rounds* to zero — a terminal has no sub-cell vertical
-positioning, so stepping past that point re-renders identical frames; the first
-tuning wasted 6 such frames out of 18.
+Three animations, on two clocks.
+
+**Overlay entry** rises into place on a harmonica spring (`internal/picker/anim.go`),
+~233ms over 8 frames at 30fps, transient. Off with `picker.animations = false`. The
+spring stops as soon as its offset *rounds* to zero — a terminal has no sub-cell
+vertical positioning, so stepping past that point re-renders identical frames; the
+first tuning wasted 6 such frames out of 18.
+
+**Status-dot breath** (`breathStep`/`breathFactor`) walks a running or waiting dot's
+colour toward the surface behind it and back, over 2.2s at 10fps on a cosine-eased
+curve. It replaced a `Faint` toggle flipping once a second, which read as a blink:
+two states, and an instant transition between them.
+
+**Row flash** (`internal/picker/flash.go`) tints a row for 900ms when a session
+starts waiting (toward Warning) or finishes working (toward Success), fading on a
+front-loaded curve so it arrives bright and lets go gently. It fires on exactly the
+two transitions the notification layer fires on, and never on first sight of a
+session — otherwise every waiting agent flashes the moment the picker opens. Grid
+cards flash their *border* rather than their fill: a card is large enough that
+tinting all of it would shout, and its border already carries focus.
+
+**Colour is the only thing a terminal can fade.** There is no opacity, so an effect
+that would dissolve in a GUI has to walk its colour toward the background instead —
+which is why `theme.Mix` is exported and why both the breath and the flash are
+colour interpolations rather than character or position tricks.
+
+**Slow animation is cheap; fast animation is not.** A 2.2s breath needs nothing like
+30 samples to look continuous, because the colour moves so little between frames. At
+10fps a 30-session frame is ~3% of a core, so the breath and the flash share one
+10fps clock — and it stops itself entirely when no session is breathing and no row
+is fading, so a settled list costs nothing. The scan handler restarts it, since a
+clock that stops has to be woken by whatever makes it relevant again. That balance
+is the whole reason the earlier "no always-on animation" conclusion was wrong: the
+constraint was never the frame cost alone, it was frame cost times sample rate.
 
 The animation clock only runs while something is moving, and that is not
 negotiable: a frame costs **1.8–5.4 ms** to assemble (measured — 1.8ms at 8

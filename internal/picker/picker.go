@@ -49,7 +49,6 @@ type PreviewUpdatedMsg string
 
 type tickScanMsg struct{}
 type tickPreviewMsg struct{}
-type tickPulseMsg struct{}
 type gridPreviewsMsg map[string]string
 
 // Picker exit actions.
@@ -106,8 +105,11 @@ type Model struct {
 	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
 	animEnabled   bool     // spring-animated overlay entry (config: picker.animations)
 	overlayAnim   overlayAnim
-	pulseOn       bool // 1Hz toggle used to breathe the status dot on running/waiting sessions
-	testNoScan    bool // test hook: disable the live tmux scanner (see export_test.go)
+	breath        float64                         // phase of the status-dot breath, 0..1
+	breathOn      bool                            // whether the breath clock is currently ticking
+	flashes       map[string]flashState           // rows fading after a state change
+	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
+	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
 }
 
 // New creates a new picker model with default settings.
@@ -136,6 +138,8 @@ func New() Model {
 		registry:     state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput:  pi,
 		workCache:    make(map[string]git.Work),
+		flashes:      make(map[string]flashState),
+		prevStatus:   make(map[string]models.SessionStatus),
 		spinner:      newSpinner(),
 	}
 }
@@ -298,16 +302,8 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		doScan(m.statesDir),
 		doPreviewTick(),
-		doPulseTick(),
+		doBreathTick(),
 	)
-}
-
-// doPulseTick fires once per second. The handler flips a bool that the
-// status-dot renderer consults to alternate Faint on running/waiting
-// sessions — a low-amplitude "breathing" pulse that reads as active work
-// without the noise of a spinning cursor.
-func doPulseTick() tea.Cmd {
-	return tea.Tick(1*time.Second, func(time.Time) tea.Msg { return tickPulseMsg{} })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -388,13 +384,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 		}
 		m.workCache = make(map[string]git.Work) // recompute work against the new scan
+		// Spot the transitions worth announcing before the new statuses overwrite
+		// the old ones.
+		for key, f := range detectFlashes(m.prevStatus, m.sessions) {
+			m.flashes[key] = f
+		}
+		m.prevStatus = statusesOf(m.sessions)
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
 		if m.testNoScan {
 			return m, nil
 		}
-		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
+		next := tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
+		// The clock stops itself when nothing is moving, so a scan that turns up
+		// activity — or starts a flash — has to start it again.
+		if !m.breathOn && (needsBreathing(m.filtered) || len(m.flashes) > 0) {
+			m.breathOn = true
+			return m, tea.Batch(next, doBreathTick())
+		}
+		return m, next
 
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
@@ -410,9 +419,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickPreviewMsg:
 		return m, m.doPreview()
 
-	case tickPulseMsg:
-		m.pulseOn = !m.pulseOn
-		return m, doPulseTick()
+	case tickBreathMsg:
+		// One clock drives both the breath and any fading rows. It stops when
+		// neither has anything to do, so a settled list costs nothing at all, and
+		// the scan handler restarts it as soon as something turns up.
+		fading := stepFlashes(m.flashes)
+		breathing := needsBreathing(m.filtered)
+		if !breathing && !fading {
+			m.breath, m.breathOn = 0, false
+			return m, nil
+		}
+		m.breathOn = true
+		if breathing {
+			m.breath = breathStep(m.breath)
+		}
+		return m, doBreathTick()
 
 	case tickAnimMsg:
 		if !m.overlayAnim.step() {
@@ -1499,9 +1520,12 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		if i == m.cursor {
 			rowBg = c.SelBg
 		}
+		// A row that just changed state fades back from a tint, so a glance catches
+		// what happened even after the status dot has settled.
+		rowBg = flashTint(rowBg, m.flashes[sessionKey(s)], flashRowDepth)
 		bg := lipgloss.NewStyle().Background(rowBg)
 
-		dot := statusDotOn(s.Status, m.pulseOn, rowBg)
+		dot := statusDotOn(s.Status, m.breath, rowBg)
 
 		star := ""
 		if m.isStarred(s.Name) {
@@ -1840,7 +1864,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			}
 
 			// Header: status dot + name + agent badge
-			dot := statusDot(s.Status, m.pulseOn)
+			dot := statusDotOn(s.Status, m.breath, c.Surface)
 			statusLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render(models.StatusLabel(s.Status))
 			agentBadge := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
@@ -1923,6 +1947,13 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				Padding(1)
 			if idx == m.cursor {
 				cellStyle = cellStyle.BorderForegroundBlend(c.GradientFrom, c.GradientTo)
+			}
+			// A flashing card lights its border rather than its fill: a card is large
+			// enough that tinting all of it would shout, and the border is already
+			// the surface that carries focus here.
+			if f := m.flashes[sessionKey(s)]; f.kind != flashNone {
+				cellStyle = cellStyle.UnsetBorderForegroundBlend().
+					BorderForeground(flashTint(c.Border, f, flashBorderDepth))
 			}
 			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
 

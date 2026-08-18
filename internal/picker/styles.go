@@ -61,22 +61,36 @@ func truncate(name string, maxWidth int) string {
 	return ansi.Truncate(name, maxWidth, ellipsis)
 }
 
-// statusDot renders the colored ● marker for a session's status, with a
-// low-amplitude breathing Faint toggle on running/waiting sessions driven
-// by the 1Hz pulse tick. Idle and dead sessions render flat.
-func statusDot(status models.SessionStatus, pulseOn bool) string {
-	return statusDotOn(status, pulseOn, nil)
+// statusDot renders the colored ● marker for a session's status. Running and
+// waiting sessions breathe; idle, dead and saved ones hold still, because motion
+// is the signal that something is happening.
+func statusDot(status models.SessionStatus, phase float64) string {
+	return statusDotOn(status, phase, nil)
 }
 
 // statusDotOn draws the dot over a known background, so a row's selection tint
-// runs unbroken behind it. Passing nil leaves the background alone.
-func statusDotOn(status models.SessionStatus, pulseOn bool, bg color.Color) string {
-	base := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(status)))
+// runs unbroken behind it and the breath fades toward the right colour. Passing
+// nil leaves the background alone and fades toward the panel surface.
+//
+// The breath was a Faint toggle flipping once a second, which read as a blink
+// rather than a pulse — two states, and the transition between them instant. It is
+// now a colour walked toward the background and back on an eased curve. That is
+// what a fade is in a terminal: there is no opacity to animate, so the only thing
+// left to move is the colour itself.
+func statusDotOn(status models.SessionStatus, phase float64, bg color.Color) string {
+	fg := color.Color(lipgloss.Color(models.StatusColor(status)))
+
+	if breathes(status) {
+		toward := bg
+		if toward == nil {
+			toward = theme.Current().Colors.Surface
+		}
+		fg = theme.Mix(fg, toward, breathDepth*breathFactor(phase))
+	}
+
+	base := lipgloss.NewStyle().Foreground(fg)
 	if bg != nil {
 		base = base.Background(bg)
-	}
-	if pulseOn && (status == models.StatusRunning || status == models.StatusWaitingInput) {
-		base = base.Faint(true)
 	}
 	return base.Render("●")
 }

@@ -161,7 +161,15 @@ belong in `internal/setup`, not in the installed files.
 | Ctrl+e | Edit config |
 | Ctrl+t | Theme picker |
 | Ctrl+b | Mailbox viewer |
+| F4 | Jump to the next session waiting on you |
 | F1 | Help overlay |
+
+F4 walks the queue: forward from the cursor and wrapping, so repeated presses reach
+every waiting session once before repeating. Most-urgent-first would ping-pong
+between the same two. Only `waiting_input` counts — offering to jump to a running
+agent would train the reflex to interrupt work in progress. It reports "nothing is
+waiting" rather than doing nothing silently, and the footer names the queue size,
+because three waiting is a different situation from one.
 
 Mouse (`picker.mouse`, default on): click a session to select it, click it again to
 jump, wheel to move the selection, click outside the help or theme overlay to close

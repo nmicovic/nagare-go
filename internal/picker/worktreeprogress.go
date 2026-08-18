@@ -82,6 +82,9 @@ func (m Model) statusLine() string {
 		return " " + m.spinner.View() + lipgloss.NewStyle().Foreground(c.Warning).
 			Render(fmt.Sprintf(" Creating worktree %q — waiting for the agent to start…", m.pending.name))
 	}
+	if m.statusNote != "" {
+		return " " + lipgloss.NewStyle().Foreground(c.Subtle).Render("· "+m.statusNote)
+	}
 	if m.statusErr != "" {
 		// A curly underline was tried here and rejected: lipgloss v2 emits a
 		// separate SGR run per grapheme once a styled underline is set, which

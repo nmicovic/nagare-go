@@ -23,4 +23,5 @@ const (
 	keyEditPrompt    = "ctrl+g"
 	keyEditConfig    = "ctrl+e"
 	keyToggleSaved   = "ctrl+s"
+	keyNextAttention = "f4"
 )

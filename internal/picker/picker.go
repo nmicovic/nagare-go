@@ -95,6 +95,7 @@ type Model struct {
 	pending       *pendingWorktree // worktree being created, nil when idle
 	spinner       spinner.Model
 	statusErr     string              // last failure, shown until the next keypress
+	statusNote    string              // neutral message, shown until the next keypress
 	workCache     map[string]git.Work // outstanding work per path, refreshed each scan
 	result        Result
 	promptMode    bool
@@ -583,8 +584,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	log.Debug("key: %q", key)
 
-	// Any keystroke acknowledges the last failure.
+	// Any keystroke acknowledges the last failure or note.
 	m.statusErr = ""
+	m.statusNote = ""
 
 	// Theme picker intercepts all keys when open
 	if m.showThemePick {
@@ -797,6 +799,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.openEditorPrompt()
 		}
 		return m, nil
+	case keyNextAttention:
+		return m.jumpToNextAttention()
 	case keyEditConfig:
 		return m, m.openConfigEditor()
 	default:

@@ -52,7 +52,18 @@ func hintsFor(m Model) []hint {
 
 	// Order below is drop order: helpBar trims from the end to fit one line, so
 	// the most useful action for the current selection has to come first.
-	// Approval leads, because a waiting agent is blocked until it arrives.
+	//
+	// The queue leads. If anything is waiting on the user, getting to it is the
+	// most useful thing the picker can offer, and the count is worth showing —
+	// "3 waiting" is a different situation from "1 waiting".
+	if n := waitingCount(m.filtered); n > 0 {
+		label := "Next waiting"
+		if n > 1 {
+			label = fmt.Sprintf("Next of %d waiting", n)
+		}
+		hints = append(hints, hint{"F4", label})
+	}
+	// Then approval, because a waiting agent is blocked until it arrives.
 	if ok && approvable(s.Status) {
 		hints = append(hints, hint{"^y", "Allow"}, hint{"^a", "Always"})
 	}
@@ -174,6 +185,7 @@ func helpOverlay(width, height int) string {
 		line("Ctrl+t", "Cycle color theme"),
 		line("F1", "Toggle this help screen"),
 		section("Actions"),
+		line("F4", "Jump to the next session waiting on you"),
 		line("Ctrl+y", "Approve permission (waiting sessions)"),
 		line("Ctrl+a", "Approve always (waiting sessions)"),
 		line("Ctrl+f", "Toggle star/favorite"),

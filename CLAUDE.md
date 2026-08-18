@@ -40,7 +40,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/state` — state files + session registry
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
-- `internal/picker` — Bubble Tea TUI (list/grid views, overlays, keybindings)
+- `internal/picker` — Bubble Tea TUI (list/grid views, overlays, keybindings, mouse)
 - `internal/notifs` — notification center TUI
 - `internal/popup` — popup notification TUI
 - `internal/session` — session creation + path resolution
@@ -162,6 +162,15 @@ belong in `internal/setup`, not in the installed files.
 | Ctrl+t | Theme picker |
 | Ctrl+b | Mailbox viewer |
 | F1 | Help overlay |
+
+Mouse (`picker.mouse`, default on): click a session to select it, click it again to
+jump, wheel to move the selection, click outside the help or theme overlay to close
+it. A single click never jumps, so a stray click cannot abandon the picker; modal
+dialogs (worktree removal, inline prompt) ignore clicks and want a deliberate answer.
+
+The footer shows only the keys valid for the current mode and selection, trimmed to
+one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
+matters most for the selection survives on a narrow terminal.
 
 ## State Files
 

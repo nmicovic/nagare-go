@@ -2,6 +2,7 @@ package picker
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,6 +102,7 @@ type Model struct {
 	promptInput   textinput.Model
 	lastQuery     string   // previous search query, to detect query changes in applyFilter
 	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
+	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
 	pulseOn       bool     // 1Hz toggle used to breathe the status dot on running/waiting sessions
 	testNoScan    bool     // test hook: disable the live tmux scanner (see export_test.go)
 }
@@ -122,13 +124,14 @@ func New() Model {
 	cfg, _ := config.Load()
 
 	return Model{
-		statesDir:   state.DefaultStatesDir(),
-		searchInput: ti,
-		showHelpBar: cfg.Picker.ShowHelpBar,
-		registry:    state.NewRegistry(state.DefaultRegistryPath()),
-		promptInput: pi,
-		workCache:   make(map[string]git.Work),
-		spinner:     newSpinner(),
+		statesDir:    state.DefaultStatesDir(),
+		searchInput:  ti,
+		showHelpBar:  cfg.Picker.ShowHelpBar,
+		mouseEnabled: cfg.Picker.Mouse,
+		registry:     state.NewRegistry(state.DefaultRegistryPath()),
+		promptInput:  pi,
+		workCache:    make(map[string]git.Work),
+		spinner:      newSpinner(),
 	}
 }
 
@@ -149,6 +152,31 @@ func (m Model) selectedSession() (models.Session, bool) {
 		return models.Session{}, false
 	}
 	return m.filtered[m.cursor], true
+}
+
+// activateSelected jumps to the selected session, loading it first when it is a
+// saved one. Both Enter and a click on the selected row land here, so the two
+// cannot drift apart.
+func (m Model) activateSelected() (tea.Model, tea.Cmd) {
+	s, ok := m.selectedSession()
+	if !ok {
+		return m, nil
+	}
+	if s.Status == models.StatusSaved {
+		agent := string(s.AgentType)
+		if agent == "" || agent == "unknown" {
+			agent = "claude"
+		}
+		name, err := session.Load(s.Path, s.Name, agent)
+		if err != nil {
+			log.Error("load session: %v", err)
+			return m, nil
+		}
+		session.SwitchToSession(name)
+		return m, tea.Quit
+	}
+	session.SwitchToPane(s)
+	return m, tea.Quit
 }
 
 // approvable reports whether Ctrl+y should send Enter to a session in this
@@ -284,6 +312,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case mouseSelectMsg:
+		if msg.index < 0 || msg.index >= len(m.filtered) {
+			return m, nil
+		}
+		m.statusErr = ""
+		m.cursor = msg.index
+		return m, m.doPreview()
+
+	case mouseActivateMsg:
+		if msg.index < 0 || msg.index >= len(m.filtered) {
+			return m, nil
+		}
+		m.cursor = msg.index
+		return m.activateSelected()
+
+	case mouseDismissMsg:
+		// Same semantics as Esc on each overlay: cancelling the theme picker
+		// restores the theme it was previewing over.
+		if m.showThemePick {
+			theme.Set(m.themeOriginal)
+			m.showThemePick = false
+		}
+		m.showHelp = false
+		return m, nil
+
+	case mouseScrollMsg:
+		if len(m.filtered) == 0 {
+			return m, nil
+		}
+		// A wheel notch moves one visual row, which in grid view is a whole
+		// rank of cards.
+		step := msg.delta
+		if m.viewMode == GridView {
+			step *= gridColumns(len(m.filtered))
+		}
+		m.cursor = min(max(m.cursor+step, 0), len(m.filtered)-1)
+		return m, m.doPreview()
+
 	case spinner.TickMsg:
 		if m.pending == nil {
 			return m, nil
@@ -379,7 +445,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
-	content := m.view()
+	content, hits := m.view()
 	// Last line of defense. Every panel is already pinned with fitBox, but a
 	// frame even one row too tall scrolls the alt screen and smears the whole
 	// UI, so clamp the assembled frame rather than trusting the arithmetic.
@@ -388,13 +454,34 @@ func (m Model) View() tea.View {
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true
+
+	if m.mouseEnabled {
+		// Cell motion, not all motion: it covers clicks, releases and the wheel
+		// while only reporting movement with a button held, and it is the better
+		// supported of the two.
+		v.MouseMode = tea.MouseModeCellMotion
+		// OnMouse exists for exactly this — resolving coordinates against the
+		// layout of the frame that was last drawn. The closure captures the hit
+		// targets built while rendering it, then emits intent, so the mouse ends
+		// up driving the same handlers as the keyboard.
+		cursor := m.cursor
+		v.OnMouse = func(msg tea.MouseMsg) tea.Cmd {
+			intent := hits.resolve(msg, cursor)
+			if intent == nil {
+				return nil
+			}
+			return func() tea.Msg { return intent }
+		}
+	}
 	return v
 }
 
-func (m Model) view() string {
+func (m Model) view() (string, hitTargets) {
 	if m.width == 0 {
-		return "Loading..."
+		return "Loading...", hitTargets{}
 	}
+
+	hits := hitTargets{}
 
 	// Render the help bar first and measure it. It soft-wraps, and how many
 	// lines it takes depends on the terminal width — assuming a fixed two
@@ -402,7 +489,7 @@ func (m Model) view() string {
 	bar := ""
 	contentHeight := m.height
 	if m.showHelpBar {
-		bar = helpBar(m.width)
+		bar = helpBar(m, m.width)
 		contentHeight = m.height - lipgloss.Height(bar)
 		if contentHeight < 1 {
 			contentHeight = 1
@@ -411,38 +498,45 @@ func (m Model) view() string {
 
 	var base string
 	if m.viewMode == GridView {
-		base = m.viewGrid(m.width, contentHeight)
+		base, hits.cards = m.viewGrid(m.width, contentHeight)
 	} else {
 		leftOuter := m.width / 5
 		rightOuter := m.width - leftOuter
-		left := m.viewLeft(leftOuter, contentHeight)
+		left, sessionAt := m.viewLeft(leftOuter, contentHeight)
 		right := m.viewRight(rightOuter, contentHeight)
 		base = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+		hits.sessionAt = sessionAt
+		hits.listWidth = leftOuter
 	}
 
 	if m.showHelpBar {
 		base = base + "\n" + bar
 	}
 
-	// Overlays drawn on top of base content
-	if m.showHelp {
-		overlay := helpOverlay(m.width, m.height)
-		return placeOverlay(m.width, m.height, overlay, base)
+	// Overlays drawn on top of base content. Whichever is open also becomes the
+	// only mouse target: an overlay's bounds are recorded so a click outside it
+	// can dismiss it, and the targets underneath are dropped so a click cannot
+	// reach through a dialog to the list behind it.
+	overlay, dismissable := "", false
+	switch {
+	case m.showHelp:
+		overlay, dismissable = helpOverlay(m.width, m.height), true
+	case m.showThemePick:
+		overlay, dismissable = themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height), true
+	case m.promptMode:
+		// Not dismissable: a half-typed prompt should not be thrown away by a
+		// stray click, and neither should a pending destructive answer.
+		overlay = m.renderPromptOverlay()
+	case m.confirmMode:
+		overlay = m.renderConfirmOverlay()
 	}
-	if m.showThemePick {
-		overlay := themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height)
-		return placeOverlay(m.width, m.height, overlay, base)
-	}
-	if m.promptMode {
-		overlay := m.renderPromptOverlay()
-		return placeOverlay(m.width, m.height, overlay, base)
-	}
-	if m.confirmMode {
-		overlay := m.renderConfirmOverlay()
-		return placeOverlay(m.width, m.height, overlay, base)
+	if overlay != "" {
+		hits.dialog = overlayRect(m.width, m.height, overlay)
+		hits.dismissable = dismissable
+		return placeOverlay(m.width, m.height, overlay, base), hits
 	}
 
-	return base
+	return base, hits
 }
 
 // renderPromptOverlay renders the inline prompt dialog.
@@ -528,24 +622,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case keyEnter:
-		if len(m.filtered) > 0 {
-			s := m.filtered[m.cursor]
-			if s.Status == models.StatusSaved {
-				agent := string(s.AgentType)
-				if agent == "" || agent == "unknown" {
-					agent = "claude"
-				}
-				name, err := session.Load(s.Path, s.Name, agent)
-				if err != nil {
-					log.Error("load session: %v", err)
-					return m, nil
-				}
-				session.SwitchToSession(name)
-				return m, tea.Quit
-			}
-			session.SwitchToPane(s)
-			return m, tea.Quit
-		}
+		return m.activateSelected()
 	case keyUp:
 		if m.viewMode == GridView {
 			cols := gridColumns(len(m.filtered))
@@ -729,8 +806,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		return m, cmd
 	}
-
-	return m, nil
 }
 
 // handleConfirmKey answers the pending worktree-removal confirmation. Anything
@@ -1232,13 +1307,13 @@ func (m Model) renderStats(live, waiting, running, saved int) string {
 	return " " + strings.Join(parts, sep)
 }
 
-func (m Model) viewLeft(outerWidth, outerHeight int) string {
+// viewLeft renders the session list panel and reports which frame row each
+// session was drawn on, for mouse hit-testing.
+func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	innerWidth := outerWidth - 4
 	if innerWidth < 10 {
 		innerWidth = 10
 	}
-
-	var b strings.Builder
 
 	// Dashboard stats. Counts describe what the list actually shows: saved
 	// sessions are hidden unless toggled, so folding them into "N sessions"
@@ -1258,8 +1333,6 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 			live++
 		}
 	}
-	b.WriteString(m.renderStats(live, waiting, running, saved))
-	b.WriteString("\n\n")
 
 	// Search input (always active)
 	if m.renameMode {
@@ -1269,37 +1342,61 @@ func (m Model) viewLeft(outerWidth, outerHeight int) string {
 	} else {
 		m.searchInput.Prompt = " > "
 	}
-	b.WriteString(m.statusLine())
-	b.WriteString("\n\n")
 
-	// Session list.
+	// The header is wrapped here rather than left to the panel style to wrap on
+	// its own, so its height — and therefore both the list's height and its
+	// position on screen — are known exactly.
+	//
+	// This also fixes a latent bug. listHeight used to assume a four-line
+	// header, but the stats line wraps to two or three lines on a narrow panel,
+	// which pushed the last rows down through the bottom border.
+	wrap := lipgloss.NewStyle().Width(innerWidth)
+	header := []string{
+		wrap.Render(m.renderStats(live, waiting, running, saved)),
+		"",
+		wrap.Render(m.statusLine()),
+		"",
+	}
+	headerHeight := 0
+	for _, line := range header {
+		headerHeight += lipgloss.Height(line)
+	}
+
 	// In lipgloss v2, Width/Height are the TOTAL rendered size — border and
 	// padding included. (v1 excluded the border, which is why the old
 	// Height(outerHeight-2) calls here left the panel two rows short of the
 	// terminal and bled the backdrop through at the bottom.)
 	// Content area = outerHeight - border(2) - vertical padding(2).
-	// Content above the list: stats (1) + blank (1) + search (1) + blank (1).
-	listHeight := outerHeight - 4 - 4
+	listHeight := outerHeight - 4 - headerHeight
 	if listHeight < 1 {
 		listHeight = 1
 	}
 
-	if m.viewMode == ListView {
-		b.WriteString(m.renderListView(innerWidth, listHeight))
-	} else {
-		b.WriteString(m.renderGridView(innerWidth, listHeight))
+	list, rowAt := m.renderListView(innerWidth, listHeight)
+
+	// Frame row of the list's first line: top border, top padding, then header.
+	listTop := 2 + headerHeight
+	sessionAt := make(map[int]int, len(rowAt))
+	for offset, idx := range rowAt {
+		sessionAt[listTop+offset] = idx
 	}
 
-	// The list is where keystrokes land, so it uses the accent-bordered
+	body := strings.Join(header, "\n") + "\n" + list
+
+	// The list is where keystrokes land, so it uses the gradient-bordered
 	// primary panel. Other panels (preview, details, empty states) stay
 	// on the quieter Border color.
 	return fitBox(primaryPanelStyle(), outerWidth, outerHeight).
-		Render(onPlane(b.String(), surfaceBg()))
+		Render(onPlane(body, surfaceBg())), sessionAt
 }
 
-func (m Model) renderListView(width, height int) string {
+// renderListView renders the visible window of session rows, and reports which
+// line of its own output each session landed on. The caller offsets those into
+// frame coordinates; keeping the mapping here means the scroll window is
+// computed exactly once, by the code that draws it.
+func (m Model) renderListView(width, height int) (string, map[int]int) {
 	if len(m.filtered) == 0 {
-		return mutedStyle().Render("  No sessions found")
+		return mutedStyle().Render("  No sessions found"), nil
 	}
 
 	// Rows carry group headers alongside sessions, so scrolling works in row
@@ -1324,6 +1421,7 @@ func (m Model) renderListView(width, height int) string {
 
 	c := theme.Current().Colors
 
+	rowAt := make(map[int]int, end-start)
 	var lines []string
 	for ri := start; ri < end; ri++ {
 		row := rows[ri]
@@ -1331,6 +1429,7 @@ func (m Model) renderListView(width, height int) string {
 			lines = append(lines, m.renderGroupHeader(row, width))
 			continue
 		}
+		rowAt[len(lines)] = row.SessionIdx
 
 		i := row.SessionIdx
 		s := m.filtered[i]
@@ -1415,7 +1514,7 @@ func (m Model) renderListView(width, height int) string {
 		}
 		lines = append(lines, bg.Width(width).Render(content.String()))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), rowAt
 }
 
 // renderGroupHeader renders the repo line above a group of sessions. It carries
@@ -1447,54 +1546,6 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 		content.WriteString(bg.Render(part))
 	}
 	return bg.Width(width).Render(content.String())
-}
-
-func (m Model) renderGridView(width, height int) string {
-	if len(m.filtered) == 0 {
-		return mutedStyle().Render("  No sessions found")
-	}
-
-	cols := 2
-	cellWidth := (width - 2) / cols
-	if cellWidth < 15 {
-		cols = 1
-		cellWidth = width - 2
-	}
-
-	c := theme.Current().Colors
-
-	var rows []string
-	for i := 0; i < len(m.filtered); i += cols {
-		var cells []string
-		for j := 0; j < cols && i+j < len(m.filtered); j++ {
-			idx := i + j
-			s := m.filtered[idx]
-			dot := statusDot(s.Status, m.pulseOn)
-			// Leading space, dot, separating space, trailing gutter.
-			maxLen := cellWidth - 3 - rowGutter
-			if maxLen < minNameWidth {
-				maxLen = minNameWidth
-			}
-			name := truncate(s.Name, maxLen)
-			// Selection: tint the cell background; same palette slot as the
-			// list view so the two modes read consistently.
-			cellBg := c.Surface
-			nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
-			if idx == m.cursor {
-				cellBg = c.SelBg
-				nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
-			}
-			nameStyled := renderNameWithMatches(name, s.Name, m.query(), nameStyle, c.Accent)
-			content := fmt.Sprintf(" %s %s", dot, nameStyled)
-			cell := lipgloss.NewStyle().
-				Background(cellBg).
-				Width(cellWidth).
-				Render(content)
-			cells = append(cells, cell)
-		}
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
-	}
-	return strings.Join(rows, "\n")
 }
 
 func (m Model) viewRight(outerWidth, outerHeight int) string {
@@ -1665,12 +1716,14 @@ func gridColumns(count int) int {
 	return 3
 }
 
-func (m Model) viewGrid(totalWidth, totalHeight int) string {
+// viewGrid renders the full-screen card grid and reports each card's bounds,
+// for mouse hit-testing.
+func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 	c := theme.Current().Colors
 
 	if len(m.filtered) == 0 {
 		return fitBox(panelStyle(), totalWidth, totalHeight).
-			Render(mutedStyle().Render("No sessions found"))
+			Render(onPlane(mutedStyle().Render("No sessions found"), surfaceBg())), nil
 	}
 
 	// Search bar at top (1 line + 1 blank line = 2 lines)
@@ -1686,6 +1739,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 
 	// Build rows of cells
 	var rows []string
+	var cards []cardHit
 	for i := 0; i < len(m.filtered); i += cols {
 		var cells []string
 		for j := 0; j < cols && i+j < len(m.filtered); j++ {
@@ -1753,6 +1807,14 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 			}
 			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
 
+			// The card's bounds in frame coordinates: one row down for the search
+			// bar, then whole cells from there.
+			x0, y0 := j*cellWidth, 1+(i/cols)*cellHeight
+			cards = append(cards, cardHit{
+				index: idx,
+				area:  image.Rect(x0, y0, x0+cellWidth, y0+cellHeight),
+			})
+
 			cells = append(cells, cell)
 		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
@@ -1778,7 +1840,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) string {
 	for len(out) < totalHeight {
 		out = append(out, canvasLine.Render(""))
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(out, "\n"), cards
 }
 
 func (m Model) getGridPreview(s models.Session, width, height int) string {

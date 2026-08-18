@@ -5,51 +5,135 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/theme"
 )
 
-// helpBar renders the bottom hint bar showing available keybindings.
-func helpBar(width int) string {
-	c := theme.Current().Colors
-	key := lipgloss.NewStyle().Foreground(c.Accent).Bold(true)
-	sep := lipgloss.NewStyle().Foreground(c.Muted).Render(" │ ")
+// hint is one key and what it does right now.
+type hint struct{ key, label string }
 
-	pairs := []struct{ k, v string }{
-		{"F1", "Help"},
-		{"F2", "Rename"},
-		{"F3", "Wtree"},
-		{"Enter", "Jump"},
-		{"↑/↓", "Navigate"},
-		{"Tab", "View"},
-		{"^n", "New"},
-		{"^r", "Proto"},
-		{"^y", "Allow"},
-		{"^a", "Always"},
-		{"^f", "Star"},
-		{"^o", "Sort"},
-		{"^l", "Prompt"},
-		{"^g", "Editor"},
-		{"^t", "Theme"},
-		{"^e", "Config"},
-		{"^s", "Saved"},
-		{"^w", "Unload"},
-		{"^x", "Kill"},
-		{"Esc", "Quit"},
+// hintsFor returns the keys actually available in the picker's current state.
+//
+// The bar used to list all twenty bindings unconditionally, which wrapped onto a
+// second line and cost a row of the session list. Worse, it advertised keys that
+// would do nothing: ^y on an idle session, ^x on a saved one. A footer that
+// changes with context is both shorter and truthful, and the full set stays one
+// F1 away — the progressive-disclosure convention zellij uses for its modes.
+func hintsFor(m Model) []hint {
+	// An open overlay or an input mode owns the keyboard, so it owns the footer.
+	switch {
+	case m.showHelp:
+		return []hint{{"F1 / Esc", "Close"}}
+	case m.showThemePick:
+		return []hint{{"↑/↓", "Preview"}, {"Enter", "Keep"}, {"Esc", "Cancel"}}
+	case m.confirmMode:
+		return []hint{{"y", "Remove worktree"}, {"n / Esc", "Keep it"}}
+	case m.promptMode:
+		return []hint{{"Enter", "Send"}, {"Esc", "Cancel"}}
+	case m.renameMode:
+		return []hint{{"Enter", "Rename"}, {"Esc", "Cancel"}}
+	case m.worktreeMode:
+		return []hint{{"Enter", "Create worktree"}, {"Esc", "Cancel"}}
 	}
+
+	hints := []hint{}
+	s, ok := m.selectedSession()
+	saved := ok && s.Status == models.StatusSaved
+
+	if ok {
+		if saved {
+			hints = append(hints, hint{"Enter", "Load"})
+		} else {
+			hints = append(hints, hint{"Enter", "Jump"})
+		}
+	}
+	hints = append(hints, hint{"↑/↓", "Navigate"})
+
+	// Order below is drop order: helpBar trims from the end to fit one line, so
+	// the most useful action for the current selection has to come first.
+	// Approval leads, because a waiting agent is blocked until it arrives.
+	if ok && approvable(s.Status) {
+		hints = append(hints, hint{"^y", "Allow"}, hint{"^a", "Always"})
+	}
+	if ok && !saved {
+		hints = append(hints, hint{"^l", "Prompt"})
+		// Ctrl+x offers worktree removal on a worktree pane, and says so rather
+		// than leaving the extra prompt as a surprise.
+		if s.Details.Worktree != "" {
+			hints = append(hints, hint{"^x", "Kill + remove"})
+		} else {
+			hints = append(hints, hint{"^x", "Kill"})
+		}
+	}
+	hints = append(hints, hint{"Tab", "View"})
+	if ok && !saved {
+		hints = append(hints, hint{"^w", "Unload"})
+	}
+	if ok {
+		hints = append(hints, hint{"F2", "Rename"}, hint{"F3", "Worktree"})
+	}
+	hints = append(hints, hint{"^n", "New"}, hint{"^f", "Star"}, hint{"^o", "Sort"})
+
+	return hints
+}
+
+// helpBar renders the bottom hint bar. It is always exactly one line: hints are
+// dropped from the end until they fit, and the trailing "F1 More · Esc Quit" is
+// reserved space so there is always a visible way to reach the rest and to get
+// out.
+func helpBar(m Model, width int) string {
+	c := theme.Current().Colors
+	keyStyle := lipgloss.NewStyle().Foreground(c.Accent).Bold(true)
+	sep := lipgloss.NewStyle().Foreground(c.Muted).Render(" │ ")
+	sepWidth := lipgloss.Width(sep)
+
+	render := func(h hint) string {
+		return keyStyle.Render(h.key) + " " + mutedStyle().Render(h.label)
+	}
+
+	tail := []hint{{"F1", "More"}, {"Esc", "Quit"}}
+	if m.showHelp || m.showThemePick || m.confirmMode || m.promptMode ||
+		m.renameMode || m.worktreeMode {
+		// A mode's own footer already names its exit; "More"/"Quit" would be
+		// wrong there, since F1 and Esc mean something else.
+		tail = nil
+	}
+
+	var tailParts []string
+	tailWidth := 0
+	for _, h := range tail {
+		part := render(h)
+		tailParts = append(tailParts, part)
+		tailWidth += lipgloss.Width(part) + sepWidth
+	}
+
+	// Available content width, inside this style's horizontal padding.
+	budget := width - 2 - tailWidth
 
 	var parts []string
-	for _, p := range pairs {
-		parts = append(parts, key.Render(p.k)+" "+mutedStyle().Render(p.v))
+	used := 0
+	for _, h := range hintsFor(m) {
+		part := render(h)
+		cost := lipgloss.Width(part)
+		if len(parts) > 0 {
+			cost += sepWidth
+		}
+		if used+cost > budget {
+			break
+		}
+		parts = append(parts, part)
+		used += cost
 	}
-
-	bar := strings.Join(parts, sep)
+	parts = append(parts, tailParts...)
 
 	return lipgloss.NewStyle().
 		Foreground(c.Muted).
 		Background(canvasBg()).
 		Width(width).
+		MaxHeight(1).
 		Padding(0, 1).
-		Render(onPlane(bar, canvasBg()))
+		Render(onPlane(strings.Join(parts, sep), canvasBg()))
 }
 
 // helpOverlay renders the full help screen shown on F1.
@@ -108,6 +192,11 @@ func helpOverlay(width, height int) string {
 		section("Search"),
 		line("Type", "Fuzzy search by session name or path"),
 		line("", "Best match is auto-selected"),
+		section("Mouse"),
+		line("Click", "Select a session; click it again to jump"),
+		line("Wheel", "Move the selection"),
+		line("Click away", "Close this screen or the theme picker"),
+		line("", "Disable with picker.mouse = false in the config"),
 		"",
 		mutedStyle().Render("  Press F1 or Esc to close"),
 	}, "\n")

@@ -147,7 +147,7 @@ func TestListRowsFitWidthExactly(t *testing.T) {
 	)
 
 	for _, width := range []int{20, 30, 41, 60, 100} {
-		rendered := m.renderListView(width, 10)
+		rendered, _ := m.renderListView(width, 10)
 		for i, line := range strings.Split(rendered, "\n") {
 			if got := lipgloss.Width(line); got != width {
 				t.Errorf("width=%d: row %d rendered %d cells, want %d (%q)", width, i, got, width, ansi.Strip(line))
@@ -171,7 +171,8 @@ func TestLongNameNotClippedWhenItFits(t *testing.T) {
 	// 41 cells is the panel width from the reported screenshot. Overhead is
 	// the dot, three spaces, the 8-cell "Claude" badge and the gutter — 13 —
 	// leaving 28 for a 24-cell name.
-	rendered := ansi.Strip(m.renderListView(41, 10))
+	listOut, _ := m.renderListView(41, 10)
+	rendered := ansi.Strip(listOut)
 	if !strings.Contains(rendered, name) {
 		t.Errorf("name %q was clipped at width 41; rendered %q", name, rendered)
 	}

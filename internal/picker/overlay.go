@@ -1,6 +1,8 @@
 package picker
 
 import (
+	"image"
+
 	"charm.land/lipgloss/v2"
 
 	"github.com/nemke/nagare-go/internal/theme"
@@ -27,15 +29,9 @@ func placeOverlay(width, height int, fg, bg string) string {
 
 	c := theme.Current().Colors
 
-	fgWidth, fgHeight := lipgloss.Width(fg), lipgloss.Height(fg)
-	x := (width - fgWidth) / 2
-	y := (height - fgHeight) / 2
-	if x < 0 {
-		x = 0
-	}
-	if y < 0 {
-		y = 0
-	}
+	area := overlayRect(width, height, fg)
+	x, y := area.Min.X, area.Min.Y
+	fgWidth, fgHeight := area.Dx(), area.Dy()
 
 	// The ground layer pins the composite to exactly width×height. Without it
 	// the bounds come from bg, which is ragged — short lines and a missing
@@ -82,4 +78,16 @@ func placeOverlay(width, height int, fg, bg string) string {
 	// wrap. Clamping here makes the function honor its own signature instead of
 	// relying on the caller to clean up after it.
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(frame)
+}
+
+// overlayRect reports where placeOverlay will draw fg: centered, clamped to the
+// top-left when fg is larger than the frame.
+//
+// Hit-testing and drawing both go through this, so a dialog's clickable bounds
+// cannot drift away from where it was actually painted.
+func overlayRect(width, height int, fg string) image.Rectangle {
+	fgWidth, fgHeight := lipgloss.Width(fg), lipgloss.Height(fg)
+	x := max((width-fgWidth)/2, 0)
+	y := max((height-fgHeight)/2, 0)
+	return image.Rect(x, y, x+fgWidth, y+fgHeight)
 }

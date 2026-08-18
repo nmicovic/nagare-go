@@ -280,7 +280,7 @@ func TestRenderListViewFitsWorktreeNames(t *testing.T) {
 	}
 	m.sortFiltered()
 
-	out := m.renderListView(width, 10)
+	out, _ := m.renderListView(width, 10)
 
 	for _, label := range []string{"shipping", "fluttering-watching-gadget", "the-site"} {
 		if !strings.Contains(out, label) {

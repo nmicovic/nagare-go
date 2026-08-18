@@ -33,6 +33,7 @@ type PickerConfig struct {
 	PopupHeight         string  `toml:"popup_height"`
 	GridRefreshInterval float64 `toml:"grid_refresh_interval"`
 	ShowHelpBar         bool    `toml:"show_help_bar"`
+	Mouse               bool    `toml:"mouse"`
 }
 
 // AppearanceConfig controls visual settings.
@@ -77,6 +78,7 @@ func Default() NagareConfig {
 			PopupHeight:         "80%",
 			GridRefreshInterval: 0.5,
 			ShowHelpBar:         true,
+			Mouse:               true,
 		},
 		Appearance: AppearanceConfig{
 			Theme:     "tokyonight",

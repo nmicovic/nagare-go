@@ -32,7 +32,7 @@ func hintsFor(m Model) []hint {
 	case m.promptMode:
 		return []hint{{"Enter", "Send"}, {"Esc", "Cancel"}}
 	case m.renameMode:
-		return []hint{{"Enter", "Rename"}, {"Esc", "Cancel"}}
+		return []hint{{"Enter", "Save name"}, {"Esc", "Cancel"}}
 	case m.worktreeMode:
 		return []hint{{"Enter", "Create worktree"}, {"Esc", "Cancel"}}
 	}
@@ -81,8 +81,11 @@ func hintsFor(m Model) []hint {
 	if ok && !saved {
 		hints = append(hints, hint{"^w", "Unload"})
 	}
+	if ok && !saved {
+		hints = append(hints, hint{"F2", "Name task"})
+	}
 	if ok {
-		hints = append(hints, hint{"F2", "Rename"}, hint{"F3", "Worktree"})
+		hints = append(hints, hint{"F3", "Worktree"})
 	}
 	hints = append(hints, hint{"^n", "New"}, hint{"^f", "Star"}, hint{"^o", "Sort"})
 
@@ -192,7 +195,7 @@ func helpColumns() ([]helpSection, []helpSection) {
 		{"Sessions", [][2]string{
 			{"Ctrl+n", "Create new session"},
 			{"Ctrl+r", "Quick prototype"},
-			{"F2", "Rename session"},
+			{"F2", "Name selected task"},
 			{"F3", "New git worktree"},
 			{"Ctrl+f", "Toggle star"},
 			{"Ctrl+o", "Cycle sort mode"},

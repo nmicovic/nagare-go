@@ -877,10 +877,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		log.Info("sort mode: %d", m.sortMode)
 		return m, nil
 	case keyRename:
-		if s, ok := m.selectedSession(); ok {
+		if s, ok := m.selectedSession(); ok && s.Status != models.StatusSaved {
 			m.renameMode = true
 			m.renameSession = s
-			m.searchInput.SetValue(s.Name)
+			// The project already lives in the group header. Edit only the task
+			// name shown on the child row, never the technical "repo/window" ID.
+			m.searchInput.SetValue(childLabel(s))
 			m.searchInput.CursorEnd()
 		}
 		return m, nil
@@ -995,47 +997,16 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.renameMode = false
 		m.searchInput.SetValue("")
 
-		if newName == "" || newName == m.renameSession.Name {
+		if newName == "" || newName == childLabel(m.renameSession) {
 			return m, nil
 		}
 
-		oldName := m.renameSession.SessionName
-
-		// Check if name already exists
-		existing := tmux.RunTmux("list-sessions", "-F", "#{session_name}")
-		for _, line := range strings.Split(existing, "\n") {
-			if strings.TrimSpace(line) == newName {
-				log.Info("rename failed: %s already exists", newName)
-				return m, nil
-			}
-		}
-
-		// Count agents in the same tmux session (multi-agent check)
-		count := 0
-		for _, s := range m.sessions {
-			if s.SessionName == oldName {
-				count++
-			}
-		}
-
-		if count > 1 {
-			// Rename just the window
-			target := fmt.Sprintf("%s:%d", oldName, m.renameSession.WindowIndex)
-			tmux.RunTmux("rename-window", "-t", target, newName)
-			log.Info("renamed window %s -> %s", target, newName)
-		} else {
-			// Rename the tmux session
-			tmux.RunTmux("rename-session", "-t", oldName, newName)
-			log.Info("renamed session %s -> %s", oldName, newName)
-
-			// Update registry
-			if existing := m.registry.Find(oldName); existing != nil {
-				path := existing.Path
-				agent := existing.Agent
-				m.registry.Remove(oldName)
-				m.registry.Register(newName, path, agent)
-			}
-		}
+		// A task name belongs to the selected agent window, not to the enclosing
+		// tmux session. Keeping the latter stable preserves the repository header,
+		// MCP target, saved-session identity, and sibling windows.
+		target := fmt.Sprintf("%s:%d", m.renameSession.SessionName, m.renameSession.WindowIndex)
+		tmux.RunTmux("rename-window", "-t", target, newName)
+		log.Info("named task %s -> %s", target, newName)
 
 		return m, doScan(m.statesDir)
 	default:
@@ -1452,7 +1423,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 
 	// Search input (always active)
 	if m.renameMode {
-		m.searchInput.Prompt = " Rename: "
+		m.searchInput.Prompt = " Name task: "
 	} else if m.worktreeMode {
 		m.searchInput.Prompt = " New worktree: "
 	} else {

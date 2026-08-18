@@ -90,7 +90,7 @@ nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 | Ctrl+o | Cycle sort |
 | Ctrl+w | Unload agent |
 | Ctrl+x | Kill session |
-| F2 | Rename |
+| F2 | Name the selected task |
 | Ctrl+n | New session |
 | Ctrl+r | Quick prototype |
 | Ctrl+l | Inline prompt |

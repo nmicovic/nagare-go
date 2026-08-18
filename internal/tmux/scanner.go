@@ -174,6 +174,19 @@ func isCustomWindowName(windowName, sessionName string) bool {
 	return !autoWindowNames[windowName]
 }
 
+// taskWindowName strips repository prefixes accidentally stored in a tmux
+// window title by older rename behaviour. Display names add the session prefix
+// themselves, so retaining it in the title would grow "repo/repo/task" on every
+// scan or rename.
+func taskWindowName(windowName, sessionName string) string {
+	name := strings.TrimSpace(windowName)
+	prefix := sessionName + "/"
+	for strings.HasPrefix(name, prefix) {
+		name = strings.TrimPrefix(name, prefix)
+	}
+	return name
+}
+
 // ComputeDisplayNames returns a map from pane_id to display name for a set of
 // agent panes sharing a tmux session. worktreeOf maps pane_id to a worktree
 // basename for panes sitting in a linked worktree, and may be nil.
@@ -184,7 +197,17 @@ func isCustomWindowName(windowName, sessionName string) bool {
 func ComputeDisplayNames(sessName string, panes []PaneInfo, worktreeOf map[string]string) map[string]string {
 	result := make(map[string]string, len(panes))
 	if len(panes) == 1 && worktreeOf[panes[0].PaneID] == "" {
-		result[panes[0].PaneID] = sessName
+		// Keep the tmux session as the stable project/group identity, but honour a
+		// user-named window as the task identity beneath it. This makes naming a
+		// lone agent behave exactly like naming one in a multi-agent repository.
+		// Auto-generated shell/agent window names still collapse to the historical
+		// bare session name, which the picker renders as "{agent}_01".
+		pane := panes[0]
+		if isCustomWindowName(pane.WindowName, sessName) {
+			result[pane.PaneID] = sessName + "/" + taskWindowName(pane.WindowName, sessName)
+		} else {
+			result[pane.PaneID] = sessName
+		}
 		return result
 	}
 
@@ -201,7 +224,7 @@ func ComputeDisplayNames(sessName string, panes []PaneInfo, worktreeOf map[strin
 	// none and must fall back to the numbered form.
 	labelFor := func(p PaneInfo) string {
 		if isCustomWindowName(p.WindowName, sessName) {
-			return p.WindowName
+			return taskWindowName(p.WindowName, sessName)
 		}
 		return worktreeOf[p.PaneID]
 	}

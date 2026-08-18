@@ -179,7 +179,7 @@ func TestFooterFollowsTheActiveMode(t *testing.T) {
 		{"theme picker", func(m Model) Model { m.showThemePick = true; return m }, []string{"Preview", "Cancel"}, "Navigate"},
 		{"confirm", func(m Model) Model { m.confirmMode = true; return m }, []string{"Remove worktree", "Keep it"}, "Navigate"},
 		{"prompt", func(m Model) Model { m.promptMode = true; return m }, []string{"Send", "Cancel"}, "Navigate"},
-		{"rename", func(m Model) Model { m.renameMode = true; return m }, []string{"Rename", "Cancel"}, "Navigate"},
+		{"rename", func(m Model) Model { m.renameMode = true; return m }, []string{"Save name", "Cancel"}, "Navigate"},
 		{"new worktree", func(m Model) Model { m.worktreeMode = true; return m }, []string{"Create worktree"}, "Navigate"},
 	}
 

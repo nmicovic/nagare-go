@@ -157,7 +157,7 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | Ctrl+o | Cycle sort mode |
 | Ctrl+w | Unload agent pane |
 | Ctrl+x | Kill the pane's window (or the session if it is the only agent pane); offers to remove a worktree |
-| F2 | Rename session |
+| F2 | Name the selected task |
 | F3 | New git worktree for this repo |
 | Ctrl+n | New session form |
 | Ctrl+r | Quick prototype |

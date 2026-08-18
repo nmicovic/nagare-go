@@ -33,7 +33,7 @@ nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi
 
 Single binary with cobra subcommands. All code in `internal/` packages.
 
-- `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush, pi)
+- `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
 - `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
 - `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
@@ -97,9 +97,9 @@ share one directory. Work is cached per path and refreshed per scan: the pane
 re-renders every frame for the status-dot pulse, so git must never be called from
 render.
 
-List rows show the git branch in the right-hand column, where the agent badge used to
-sit: with every pane usually running the same agent the branch is the more informative
-use of those columns, and the agent is still named in the detail pane and grid view.
+List rows show a colored one-cell agent sigil (`C` for Claude Code, `X` for Codex,
+etc.) beside the name and the git branch in the right-hand column. Keeping both visible
+matters when one tmux session mixes agents whose generated pane names look similar.
 `branchFor` suppresses a branch that only repeats the row — Claude names a worktree's
 branch `worktree-<name>` — checking the worktree name as well as the label, since a lone
 pane in a worktree is labelled with its full `{session}/{worktree}` name.
@@ -108,8 +108,9 @@ branch below `minBranchWidth`.
 
 In the list view, sessions sharing a tmux session name are grouped under a single
 header row naming the repo, and children show only their own name — so the repo
-prefix is not repeated on every row. Grouping starts at two members; a lone session
-renders as a plain row. A group takes the position of its most urgent member, so a
+prefix is not repeated on every row. Lone sessions also get a header and one indented
+agent child, keeping the tree and agent sigils aligned across the list. One blank row
+separates project blocks. A group takes the position of its most urgent member, so a
 waiting worktree lifts its whole repo. Rows are derived per frame by
 `picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
 
@@ -124,6 +125,7 @@ per-agent elsewhere.
 | Agent | Status reporting | Messaging tools |
 |-------|------------------|-----------------|
 | Claude Code | hooks in `~/.claude/settings.json` | MCP (`~/.claude.json`) |
+| Codex | hooks in `~/.codex/hooks.json` | MCP (`~/.codex/config.toml`) |
 | Gemini CLI | hooks in `~/.gemini/settings.json` | MCP (`~/.gemini/settings.json`) |
 | OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
@@ -136,6 +138,9 @@ server calls. pi also has no permission prompts, so pi sessions never reach
 
 Generated plugin/extension files are rewritten on every `nagare-go setup`, so edits
 belong in `internal/setup`, not in the installed files.
+
+Codex requires newly installed command hooks to be reviewed once with `/hooks`.
+Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 
 ## Picker Keybindings
 

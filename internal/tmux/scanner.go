@@ -32,6 +32,7 @@ var agentProcesses = map[string]models.AgentType{
 	"claude":   models.AgentClaude,
 	"opencode": models.AgentOpenCode,
 	"pi":       models.AgentPi,
+	"codex":    models.AgentCodex,
 }
 
 // ParseSessions parses tmux list-sessions output.
@@ -116,6 +117,7 @@ var descendantAgents = map[string]models.AgentType{
 	"gemini": models.AgentGemini,
 	"crush":  models.AgentCrush,
 	"pi":     models.AgentPi,
+	"codex":  models.AgentCodex,
 }
 
 // resolveAgentFromDescendants walks the process tree via /proc to find

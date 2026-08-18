@@ -111,6 +111,43 @@ func installCommands(home string) {
 
 	// Crush uses Agent Skills instead of slash commands
 	installCrushSkill(home)
+	// Codex uses Agent Skills for reusable messaging workflows.
+	installCodexSkill(home)
+}
+
+// installCodexSkill writes one discoverable skill covering all Nagare MCP
+// messaging workflows. Codex can invoke it automatically or via $nagare.
+func installCodexSkill(home string) {
+	dir := filepath.Join(home, ".codex", "skills", "nagare")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Printf("  Skill: Codex — skipped (%v)\n", err)
+		return
+	}
+	skill := `---
+name: nagare
+description: Communicate with other AI coding-agent sessions through Nagare. Use when the user asks to list agents, send or await a message, check the inbox, or reply to another agent.
+---
+
+# Nagare inter-agent messaging
+
+Use the Nagare MCP tools directly:
+
+- list_agents() lists sessions with their status and project path.
+- send_message(target, message) sends without waiting.
+- send_message_and_wait(target, message, timeout) waits for a reply.
+- check_messages() reads pending messages and late responses.
+- reply(message_id, content) answers a pending message.
+
+Before sending, call list_agents() to resolve the target. Prefer an idle target
+before waiting for a response. Reply to every pending message that calls for an
+answer.
+`
+	path := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(path, []byte(skill), 0644); err != nil {
+		fmt.Printf("  Skill: Codex — skipped (%v)\n", err)
+		return
+	}
+	fmt.Printf("  Skill: Codex — %s\n", dir)
 }
 
 // installCrushSkill writes a nagare Agent Skill to ~/.config/crush/skills/nagare/SKILL.md.

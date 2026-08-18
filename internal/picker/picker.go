@@ -1541,6 +1541,10 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 	var lines []string
 	for ri := start; ri < end; ri++ {
 		row := rows[ri]
+		if row.SessionIdx == spacerRow {
+			lines = append(lines, strings.Repeat(" ", width))
+			continue
+		}
 		if row.SessionIdx < 0 {
 			lines = append(lines, m.renderGroupHeader(row, width))
 			continue
@@ -1580,30 +1584,31 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		}
 		starStyled := bg.Foreground(c.Warning).Render(star)
 
-		// Row layout: a left cluster (status dot + name) and a right cluster
-		// (star + agent badge) pinned to the right edge. Right-aligning the
-		// badges lines them up in a clean gutter instead of letting them
-		// float at ragged offsets that vary with each name's length — and it
-		// hands every spare column to the name. The star sits inside the
-		// cluster ahead of the badge so a starred row does not shunt its
-		// badge out of the shared column.
+		// Row layout starts with status, tree prefix, and an explicit agent
+		// badge. Keeping the badge next to the name makes mixed Claude Code and
+		// Codex sessions distinguishable at a glance; their generated pane names
+		// are too similar to carry that responsibility by themselves.
 		// A grouped child is indented under its header and shows only its own
 		// name — the repo is on the header, so the prefix is not repeated.
 		prefix := ""
 		if row.Glyph != "" {
 			prefix = row.Glyph + " "
 		}
+		agent := listAgentLabel(s.AgentType) + " "
+		agentStyled := bg.
+			Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
+			Bold(true).
+			Render(agent)
 
-		// The branch takes the right-hand column. The agent badge used to live
-		// there, but with every pane usually running the same agent the branch
-		// is the more informative use of those columns; the agent is still
-		// named in the detail pane and in grid view.
+		// The branch keeps the right-hand column; the compact agent badge is part
+		// of the left cluster so both remain visible on ordinary pane widths.
 		branch := branchFor(row.Label, s.Details.Worktree, s.Details.GitBranch)
 
 		// Columns the row spends on anything that is not text: leading space,
-		// the dot, the space after it, the tree prefix, the star, and the
+		// the dot, the space after it, the tree prefix, agent badge, star, and the
 		// trailing gutter.
-		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) + lipgloss.Width(star) + rowGutter
+		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) +
+			lipgloss.Width(agentStyled) + lipgloss.Width(star) + rowGutter
 		avail := width - fixed
 		if avail < minNameWidth {
 			avail = minNameWidth
@@ -1629,7 +1634,8 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		prefixStyled := bg.Foreground(c.Muted).Render(prefix)
 
 		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) -
-			lipgloss.Width(nameStyled) - lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
+			lipgloss.Width(agentStyled) - lipgloss.Width(nameStyled) -
+			lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
 		if gap < 1 {
 			gap = 1
 		}
@@ -1637,12 +1643,33 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		// Every segment already carries rowBg, so the row is assembled by plain
 		// concatenation and padded once. onPlane re-establishes the tint after the
 		// resets the segments leave behind.
-		line := " " + dot + " " + prefixStyled + nameStyled +
+		line := " " + dot + " " + prefixStyled + agentStyled + nameStyled +
 			strings.Repeat(" ", gap) + starStyled + branchStyled +
 			strings.Repeat(" ", rowGutter)
 		lines = append(lines, bg.Width(width).Render(onPlane(line, rowBg)))
 	}
 	return strings.Join(lines, "\n"), rowAt
+}
+
+// listAgentLabel is a one-cell sigil: color carries most of the identity, while
+// the letter keeps it readable without color and leaves room for names/branches.
+func listAgentLabel(agent models.AgentType) string {
+	switch agent {
+	case models.AgentClaude:
+		return "C"
+	case models.AgentCodex:
+		return "X"
+	case models.AgentOpenCode:
+		return "O"
+	case models.AgentGemini:
+		return "G"
+	case models.AgentCrush:
+		return "♥"
+	case models.AgentPi:
+		return "π"
+	default:
+		return "?"
+	}
 }
 
 // renderGroupHeader renders the repo line above a group of sessions. It carries
@@ -1651,7 +1678,11 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 func (m Model) renderGroupHeader(row listRow, width int) string {
 	c := theme.Current().Colors
 
-	count := mutedStyle().Render(fmt.Sprintf("%d sessions", row.Count))
+	noun := "sessions"
+	if row.Count == 1 {
+		noun = "session"
+	}
+	count := mutedStyle().Render(fmt.Sprintf("%d %s", row.Count, noun))
 	fixed := 1 + 1 + lipgloss.Width(count) + rowGutter
 	maxName := width - fixed
 	if maxName < minNameWidth {

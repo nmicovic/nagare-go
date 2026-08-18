@@ -140,6 +140,18 @@ func TestParseAllPanesDetectsPi(t *testing.T) {
 	}
 }
 
+func TestParseAllPanesDetectsCodex(t *testing.T) {
+	raw := "proj:0:0:codex:12345:zsh:%1\n"
+	panes := ParseAllPanes(raw)
+	p, ok := panes["proj"]
+	if !ok || len(p) != 1 {
+		t.Fatalf("expected 1 Codex pane, got %v", panes)
+	}
+	if p[0].AgentType != models.AgentCodex {
+		t.Errorf("agent = %q, want %q", p[0].AgentType, models.AgentCodex)
+	}
+}
+
 func TestParseAllPanesCapturesPanePath(t *testing.T) {
 	raw := "proj:0:0:claude:111:? claude:%2:/home/u/proj/.claude/worktrees/the-site\n"
 	panes := ParseAllPanes(raw)

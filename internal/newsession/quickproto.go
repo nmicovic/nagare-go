@@ -40,7 +40,7 @@ func NewQuick() QuickModel {
 
 			huh.NewSelect[string]().
 				Title("Agent").
-				Options(huh.NewOptions("claude", "opencode", "pi")...).
+				Options(huh.NewOptions("claude", "codex", "opencode", "pi")...).
 				Value(&s.agent),
 		),
 	).WithTheme(formTheme()).WithShowHelp(true)

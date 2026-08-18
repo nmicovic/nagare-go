@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/nemke/nagare-go/internal/bin"
 )
 
@@ -21,6 +22,16 @@ var hookEvents = []string{
 	"ElicitationResult", // input supplied, turn resumes
 	"Stop",
 	"StopFailure", // turn died on an API error — otherwise stuck "working"
+	"SessionStart",
+	"SessionEnd",
+}
+
+// Codex exposes the same lifecycle event names and stdin JSON envelope as
+// Claude Code. These are the events needed for Nagare's four visible states.
+var codexHookEvents = []string{
+	"UserPromptSubmit",
+	"PermissionRequest",
+	"Stop",
 	"SessionStart",
 	"SessionEnd",
 }
@@ -59,6 +70,9 @@ func Run() error {
 	if err := installGeminiHooks(home, nagareBin); err != nil {
 		fmt.Printf("  Hooks: Gemini CLI — skipped (%v)\n", err)
 	}
+	if err := installCodexHooks(home, nagareBin); err != nil {
+		fmt.Printf("  Hooks: Codex — skipped (%v)\n", err)
+	}
 
 	// OpenCode and pi have no settings-file hook mechanism; they report status
 	// from a plugin and an extension instead.
@@ -83,6 +97,14 @@ func Run() error {
 		}
 	}
 
+	// Codex uses TOML tables for stdio MCP servers.
+	codexConfig := filepath.Join(home, ".codex", "config.toml")
+	if err := registerMCPCodex(codexConfig, nagareBin); err != nil {
+		fmt.Printf("  MCP server: Codex — skipped (%v)\n", err)
+	} else {
+		fmt.Printf("  MCP server: Codex — %s\n", codexConfig)
+	}
+
 	// OpenCode and Crush use "mcp" key with type/command format.
 	// OpenCode's global config is opencode.json — config.json was the old name
 	// and current versions ignore it.
@@ -101,6 +123,101 @@ func Run() error {
 	installCommands(home)
 
 	fmt.Println("\nSetup complete!")
+	return nil
+}
+
+// registerMCPCodex adds Nagare's stdio server to Codex's TOML config while
+// preserving comments, ordering, and every unrelated user setting.
+func registerMCPCodex(configPath, nagareBin string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot read %s: %w", configPath, err)
+	}
+	if len(data) > 0 {
+		var cfg map[string]interface{}
+		if _, err := toml.Decode(string(data), &cfg); err != nil {
+			return fmt.Errorf("invalid TOML in %s: %w", configPath, err)
+		}
+	}
+
+	const section = "mcp_servers.nagare"
+	var kept []string
+	skipping := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			name := strings.TrimSpace(strings.Trim(trimmed, "[]"))
+			skipping = name == section || strings.HasPrefix(name, section+".")
+		}
+		if !skipping {
+			kept = append(kept, line)
+		}
+	}
+
+	base := strings.TrimSpace(strings.Join(kept, "\n"))
+	entry := fmt.Sprintf("[mcp_servers.nagare]\ncommand = %q\nargs = [\"mcp\"]", nagareBin)
+	out := entry + "\n"
+	if base != "" {
+		out = base + "\n\n" + out
+	}
+	var cfg map[string]interface{}
+	if _, err := toml.Decode(out, &cfg); err != nil {
+		return fmt.Errorf("cannot encode Codex MCP config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, []byte(out), 0644)
+}
+
+// installCodexHooks installs user-level lifecycle hooks. Codex merges hook
+// sources, so unrelated hooks in this file and hooks from other layers remain
+// active. Codex asks the user to review new command hooks in /hooks.
+func installCodexHooks(home, nagareBin string) error {
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	hookCmd := nagareBin + " hook-state"
+
+	settings, err := loadJSON(hooksPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot read %s: %w", hooksPath, err)
+	}
+	if settings == nil {
+		settings = make(map[string]interface{})
+	}
+	hooksMap, _ := settings["hooks"].(map[string]interface{})
+	if hooksMap == nil {
+		hooksMap = make(map[string]interface{})
+	}
+	for event := range hooksMap {
+		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare-go hook-state")
+		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare hook-state")
+	}
+	for _, event := range codexHookEvents {
+		timeout := 5
+		if event == "SessionEnd" {
+			timeout = 3
+		}
+		hooksMap[event] = appendHookEntry(hooksMap[event], map[string]interface{}{
+			"hooks": []interface{}{map[string]interface{}{
+				"type":    "command",
+				"command": hookCmd,
+				"timeout": timeout,
+			}},
+		})
+	}
+	settings["hooks"] = hooksMap
+
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(hooksPath, data, 0644); err != nil {
+		return err
+	}
+	fmt.Printf("  Hooks installed: Codex — %s (review once with /hooks)\n", hooksPath)
 	return nil
 }
 
@@ -315,7 +432,8 @@ func loadJSON(path string) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// removeNagareHooks filters out hook entries containing the given command substring.
+// removeNagareHooks filters out matching command handlers while preserving
+// unrelated handlers that happen to share the same matcher group.
 func removeNagareHooks(eventVal interface{}, cmdSubstr string) interface{} {
 	arr, ok := eventVal.([]interface{})
 	if !ok {
@@ -323,35 +441,24 @@ func removeNagareHooks(eventVal interface{}, cmdSubstr string) interface{} {
 	}
 	var kept []interface{}
 	for _, item := range arr {
-		if containsCommand(item, cmdSubstr) {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			kept = append(kept, item)
 			continue
+		}
+		if cmd, ok := m["command"].(string); ok && strings.Contains(cmd, cmdSubstr) {
+			continue
+		}
+		if nested, ok := m["hooks"].([]interface{}); ok {
+			filtered, _ := removeNagareHooks(nested, cmdSubstr).([]interface{})
+			if len(filtered) == 0 {
+				continue
+			}
+			m["hooks"] = filtered
 		}
 		kept = append(kept, item)
 	}
 	return kept
-}
-
-// containsCommand checks if a hook entry or group contains a command with the given substring.
-func containsCommand(item interface{}, substr string) bool {
-	m, ok := item.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	// Direct hook entry: {"type": "command", "command": "..."}
-	if cmd, ok := m["command"].(string); ok {
-		if strings.Contains(cmd, substr) {
-			return true
-		}
-	}
-	// Hook group with nested hooks array
-	if hooks, ok := m["hooks"].([]interface{}); ok {
-		for _, h := range hooks {
-			if containsCommand(h, substr) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // appendHookEntry appends a hook entry to an event's array.

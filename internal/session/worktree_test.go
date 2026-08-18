@@ -29,7 +29,7 @@ func TestPlanWorktreeLaunchClaude(t *testing.T) {
 
 func TestPlanWorktreeLaunchOtherAgents(t *testing.T) {
 	root := "/home/u/Projects/app"
-	for _, agent := range []string{"opencode", "gemini", "crush", "pi"} {
+	for _, agent := range []string{"opencode", "gemini", "crush", "pi", "codex"} {
 		got := planWorktreeLaunch(agent, root, "the-site", true)
 
 		want := filepath.Join(root, ".worktrees", "the-site")
@@ -60,7 +60,7 @@ func TestPlanWorktreeLaunchOtherAgents(t *testing.T) {
 // --tmux would make Claude create a second tmux session, fighting the one
 // nagare just made the window in.
 func TestPlanWorktreeLaunchNeverPassesTmux(t *testing.T) {
-	for _, agent := range []string{"claude", "opencode", "pi"} {
+	for _, agent := range []string{"claude", "opencode", "pi", "codex"} {
 		if got := planWorktreeLaunch(agent, "/r", "w", true); strings.Contains(got.Cmd, "--tmux") {
 			t.Errorf("%s: Cmd = %q, must not pass --tmux", agent, got.Cmd)
 		}
@@ -70,7 +70,7 @@ func TestPlanWorktreeLaunchNeverPassesTmux(t *testing.T) {
 // Every agent must launch itself. "crush" previously fell through to the
 // default branch and silently started claude.
 func TestAgentCommandLaunchesTheRequestedAgent(t *testing.T) {
-	for _, agent := range []string{"claude", "opencode", "gemini", "crush", "pi"} {
+	for _, agent := range []string{"claude", "opencode", "gemini", "crush", "pi", "codex"} {
 		if got := agentCommand(agent, "/tmp", false); !strings.HasPrefix(got, agent) {
 			t.Errorf("agentCommand(%q) = %q, want it to launch %s", agent, got, agent)
 		}

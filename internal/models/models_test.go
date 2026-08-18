@@ -27,6 +27,7 @@ func TestAgentTypeString(t *testing.T) {
 		{AgentClaude, "claude"},
 		{AgentOpenCode, "opencode"},
 		{AgentGemini, "gemini"},
+		{AgentCodex, "codex"},
 		{AgentUnknown, "unknown"},
 	}
 	for _, tt := range tests {
@@ -46,8 +47,8 @@ func TestStatusLabel(t *testing.T) {
 }
 
 func TestAgentLabel(t *testing.T) {
-	if got := AgentLabel(AgentClaude); got != "Claude" {
-		t.Errorf("AgentLabel(Claude) = %q, want %q", got, "Claude")
+	if got := AgentLabel(AgentClaude); got != "Claude Code" {
+		t.Errorf("AgentLabel(Claude) = %q, want %q", got, "Claude Code")
 	}
 }
 
@@ -60,7 +61,7 @@ func TestStatusColor(t *testing.T) {
 // Every agent type needs a label, a foreground color, and a background color;
 // a missing case silently renders as "Unknown" in the picker.
 func TestAgentPresentationComplete(t *testing.T) {
-	agents := []AgentType{AgentClaude, AgentOpenCode, AgentGemini, AgentCrush, AgentPi}
+	agents := []AgentType{AgentClaude, AgentOpenCode, AgentGemini, AgentCrush, AgentPi, AgentCodex}
 	for _, a := range agents {
 		if label := AgentLabel(a); label == "Unknown" {
 			t.Errorf("AgentLabel(%q) has no label", a)

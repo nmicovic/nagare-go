@@ -1,5 +1,5 @@
 <h1 align="center">nagare-go 流れ</h1>
-<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, OpenCode, Gemini CLI, Crush, and pi sessions from a single interface.</p>
+<p align="center">A tmux-integrated session manager for AI coding agents.<br>Monitor, switch, and control multiple Claude Code, Codex, OpenCode, Gemini CLI, Crush, and pi sessions from a single interface.</p>
 
 <p align="center">
   <img src="images/nagare-logo-glowing.jpg" alt="nagare-go" width="550">
@@ -42,15 +42,19 @@ This does three things:
    | Agent | Mechanism |
    |-------|-----------|
    | Claude Code | hooks in `~/.claude/settings.json` |
+   | Codex | hooks in `~/.codex/hooks.json` |
    | Gemini CLI | hooks in `~/.gemini/settings.json` |
    | OpenCode | plugin at `~/.config/opencode/plugins/nagare.js` |
    | pi | extension at `~/.pi/agent/extensions/nagare.ts` |
 
-2. **Registers the MCP server** in `~/.claude.json`, `~/.gemini/settings.json`, `~/.config/opencode/opencode.json`, and `~/.config/crush/crush.json` — enabling inter-agent messaging. pi has no MCP client by design, so its extension registers the same five tools and routes them through `nagare-go tool`.
+2. **Registers the MCP server** in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`, `~/.config/opencode/opencode.json`, and `~/.config/crush/crush.json` — enabling inter-agent messaging. pi has no MCP client by design, so its extension registers the same five tools and routes them through `nagare-go tool`.
 
-3. **Installs slash commands** (`/nagare-ls`, `/nagare-send`, `/nagare-send-wait`, `/nagare-inbox`) for Claude Code, Gemini CLI, OpenCode, and pi — and an equivalent Agent Skill for Crush.
+3. **Installs messaging workflows** as slash commands (`/nagare-ls`, `/nagare-send`, `/nagare-send-wait`, `/nagare-inbox`) for Claude Code, Gemini CLI, OpenCode, and pi — and as Agent Skills for Codex and Crush.
 
 Re-running `setup` is safe: it rewrites the generated plugin and extension files in place and refreshes every registration.
+
+Codex asks you to review newly installed command hooks once. Open `/hooks` in Codex
+and trust the Nagare hooks after setup.
 
 Then add a tmux keybinding to open the picker:
 
@@ -65,7 +69,7 @@ Reload tmux config: `tmux source-file ~/.tmux.conf`
 
 ```bash
 nagare-go              # open session picker (default)
-nagare-go new ~/proj   # create new session with Claude (-a opencode|gemini|crush|pi)
+nagare-go new ~/proj   # create new session with Claude (-a codex|opencode|gemini|crush|pi)
 nagare-go new ~/proj -w my-feature   # start an agent in a new named git worktree
 nagare-go new myproto  # quick prototype (creates in ~/Prototypes/)
 nagare-go notifs       # notification center + settings

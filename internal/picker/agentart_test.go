@@ -50,3 +50,15 @@ func TestAgentArtPi(t *testing.T) {
 		t.Error("renderAgentArtSmall(pi) returned empty")
 	}
 }
+
+func TestAgentArtCodex(t *testing.T) {
+	art, ok := agentArt[models.AgentCodex]
+	if !ok || art == "" {
+		t.Fatal("Codex has no logo")
+	}
+	for i, line := range strings.Split(art, "\n") {
+		if w := ansi.PrintableRuneWidth(line); w != 8 {
+			t.Errorf("Codex logo row %d is %d cells wide, want 8", i, w)
+		}
+	}
+}

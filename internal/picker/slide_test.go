@@ -111,11 +111,11 @@ func TestStartSlideGuards(t *testing.T) {
 			t.Error("slide started across a list length change")
 		}
 	})
-	t.Run("grid view leaves a trail", func(t *testing.T) {
+	t.Run("grid view", func(t *testing.T) {
 		m := base(t)
 		m.viewMode = GridView
-		if !m.startSlide(m.cursor+1, len(m.filtered)) {
-			t.Error("grid view should slide too, as a dimming border trail")
+		if m.startSlide(m.cursor+1, len(m.filtered)) {
+			t.Error("slide started in grid view, where cards do not animate")
 		}
 	})
 	t.Run("overlay open", func(t *testing.T) {
@@ -196,66 +196,6 @@ func TestSlideShowsTwoTintedRows(t *testing.T) {
 		want := bgSGR(theme.Mix(c.Surface, c.SelBg, tint))
 		if !strings.Contains(frame, want) {
 			t.Errorf("%s row is not partially tinted in the frame (looked for %s)", label, want)
-		}
-	}
-}
-
-// TestGridSlideLeavesADimmingTrail — a gradient border has no partial form, so the
-// grid's version of the crossfade is the outgoing card dimming from the accent back
-// to quiet chrome. Check it actually reaches the frame, and that it fades.
-func TestGridSlideLeavesADimmingTrail(t *testing.T) {
-	m := gridModel(t, 200, 40, longSessions(6))
-	m.animEnabled = true
-	m.cursor = 0
-
-	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	m = next.(Model)
-	if m.cursor == 0 {
-		t.Fatal("right arrow did not move the grid cursor")
-	}
-	if !m.slide.active {
-		t.Fatal("moving in grid view did not start a slide")
-	}
-
-	c := theme.Current().Colors
-	seen := 0
-	prev := 2.0
-	for {
-		trail := m.slide.tintFor(m.slide.from, m.cursor)
-		if trail <= 0 {
-			break
-		}
-		if trail >= prev {
-			t.Fatalf("trail brightened: %v then %v", prev, trail)
-		}
-		prev = trail
-
-		// Only count intermediate values. At trail 1 the blend *is* GradientFrom,
-		// which the selected card's gradient border already contains, so matching
-		// there passes whether or not the trail exists — the first version of this
-		// test did exactly that and survived the feature being deleted.
-		if trail < 0.95 && trail > 0.05 {
-			frame, _ := m.view()
-			// The border's colour is emitted together with its background in one SGR,
-			// so match the parameter fragment rather than a whole sequence.
-			if strings.Contains(frame, fgParams(theme.Mix(c.Border, c.GradientFrom, trail))) {
-				seen++
-			}
-		}
-		if !m.slide.step() {
-			break
-		}
-	}
-	if seen == 0 {
-		t.Error("the outgoing card's border never carried a partially dimmed accent")
-	}
-
-	// Once settled, no card carries a trail colour.
-	m.slide = selectionSlide{}
-	settled, _ := m.view()
-	for _, level := range []float64{0.25, 0.5, 0.75} {
-		if strings.Contains(settled, fgParams(theme.Mix(c.Border, c.GradientFrom, level))) {
-			t.Errorf("a trail colour (%.2f) survives after the slide settled", level)
 		}
 	}
 }

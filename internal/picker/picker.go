@@ -2030,11 +2030,13 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			// panel in list view, so "this is where you are" looks identical in
 			// both modes. Unselected cards stay on quiet chrome.
 			//
-			// While the selection is moving, the card being left behind dims from the
-			// accent back to that quiet border rather than dropping to it in one
-			// frame. A gradient cannot be partially applied — BorderForegroundBlend
-			// takes stops, not an amount — so the outgoing card gets a solid border
-			// walked between the two, which is what a fading trail looks like anyway.
+			// Nothing about a card animates. A trail on the card being left behind
+			// and a flash on a card whose agent changed state were both tried and
+			// both rejected: a card is a large object, and moving or lighting one
+			// pulls the eye to the card rather than to what is written on it. The
+			// status dot inside it still breathes, and in list view the row tint
+			// still crossfades and flashes — a row is a thin enough thing that motion
+			// reads as a hint rather than as an event.
 			cellStyle := lipgloss.NewStyle().
 				Background(c.Surface).
 				Foreground(c.Foreground).
@@ -2044,16 +2046,6 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				Padding(1)
 			if idx == m.cursor {
 				cellStyle = cellStyle.BorderForegroundBlend(c.GradientFrom, c.GradientTo)
-			} else if trail := m.slide.tintFor(idx, m.cursor); trail > 0 {
-				cellStyle = cellStyle.BorderForeground(
-					theme.Mix(c.Border, c.GradientFrom, trail))
-			}
-			// A flashing card lights its border rather than its fill: a card is large
-			// enough that tinting all of it would shout, and the border is already
-			// the surface that carries focus here.
-			if f := m.flashes[sessionKey(s)]; f.kind != flashNone {
-				cellStyle = cellStyle.UnsetBorderForegroundBlend().
-					BorderForeground(flashTint(c.Border, f, flashBorderDepth))
 			}
 			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
 

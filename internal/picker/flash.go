@@ -90,6 +90,9 @@ func flashEase(level float64) float64 {
 
 // flashTint blends a colour toward the flash colour for its kind: warning for an
 // agent that wants the user, success for one that has just finished.
+//
+// Only list rows use this. Flashing a grid card's border was tried and rejected
+// along with the other card animations.
 func flashTint(base color.Color, f flashState, depth float64) color.Color {
 	if f.kind == flashNone || f.level <= 0 {
 		return base

@@ -275,3 +275,39 @@ func TestFrameIsExactlyTerminalSized(t *testing.T) {
 		}
 	}
 }
+
+// TestGridCardsDoNotAnimate is the guard on a deliberate decision: nothing about a
+// card moves or changes colour over time. A trail on the card being left behind, a
+// flash on a card whose agent changed state, and a staggered arrival were all tried
+// and all rejected — a card is a large object, and animating one pulls the eye to
+// the card rather than to what is written on it.
+//
+// The status dot inside a card still breathes, so this compares frames with the
+// breath phase held still. That is the only moving part left in grid view.
+func TestGridCardsDoNotAnimate(t *testing.T) {
+	m := gridModel(t, 200, 40, longSessions(6))
+	m.animEnabled = true
+
+	// Force on everything that would previously have animated a card. The slide is
+	// started directly rather than through a key press: startSlide refuses in grid
+	// view, so going through it would leave the render side untested and this test
+	// would pass with a card trail re-added — which it did, the first time.
+	m.cursor = 1
+	m.slide.start(0)
+	for _, s := range m.filtered {
+		m.flashes[sessionKey(s)] = flashState{kind: flashAttention, level: 1}
+	}
+
+	first, _ := m.view()
+	for frame := 1; frame <= 3*animFPS; frame++ {
+		next, _ := m.Update(tickAnimMsg{})
+		m = next.(Model)
+		// Hold the breath still: it is allowed to move, and it is not a card.
+		m.breath = 0
+
+		got, _ := m.view()
+		if got != first {
+			t.Fatalf("grid frame changed at frame %d; cards must not animate", frame)
+		}
+	}
+}

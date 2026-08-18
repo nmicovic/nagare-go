@@ -220,12 +220,11 @@ func (m Model) overlayOpen() bool {
 // index the cursor came from no longer refers to the same session and a crossfade
 // there would light up something unrelated.
 //
-// It applies in both views. A list row crossfades its background; a grid card
-// cannot, since a gradient border has no partial form, so the card being left
-// behind dims from the accent back to quiet chrome instead — a trail rather than a
-// crossfade, but the same signal.
+// Grid view is excluded: nothing about a card animates. A dimming border trail was
+// tried there and rejected — a card is a large object, and moving or lighting one
+// pulls the eye to the card rather than to what is written on it.
 func (m *Model) startSlide(prevCursor, prevLen int) bool {
-	if !m.animEnabled || m.overlayOpen() {
+	if !m.animEnabled || m.viewMode != ListView || m.overlayOpen() {
 		return false
 	}
 	if m.cursor == prevCursor || len(m.filtered) != prevLen {

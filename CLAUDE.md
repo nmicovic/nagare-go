@@ -281,7 +281,7 @@ covers the arithmetic feeding through to the whole frame.
 
 ### Animation
 
-Five animations, on two clocks — one transient at 30fps for motion, one slow at
+Four animations, on two clocks — one transient at 30fps for motion, one slow at
 10fps for anything continuous.
 
 **Overlay entry** rises into place on a harmonica spring (`internal/picker/anim.go`),
@@ -313,20 +313,19 @@ the previous index no longer refers to the same session), in grid view (selectio
 there is a card border, which does not crossfade legibly), and while an overlay has
 the screen.
 
-Tried and removed: **staggering the grid cards in** when the grid is first shown.
-It was technically fine — one shared spring table, cards shifted inside their cells
-so the layout never moved — and it read as fussy. Cards appearing is not a moment
-that needs narrating, and animating a whole screenful of content draws attention to
-the transition rather than to the content. Do not re-add it.
+**Nothing about a grid card animates.** Three attempts were made and all three were
+rejected on looks: a staggered arrival when the grid is first shown, a dimming border
+trail on the card being left behind, and a border flash when a card's agent changed
+state. A card is a large object, and moving or lighting one pulls the eye to the card
+rather than to what is written on it — a row is thin enough that motion reads as a
+hint, a card is not. Do not re-add any of them.
 
-In grid view the selection slide becomes a **dimming trail**: a gradient border has
-no partial form — `BorderForegroundBlend` takes stops, not an amount — so the card
-being left behind walks a solid border from the accent back to quiet chrome.
-
-A **worktree arrival** flashes the row its pane landed on, reusing the flash rather
-than inventing a second effect. The spinner sits above the list while the new pane
-arrives sorted somewhere inside it, so without the hand-off the wait ends by the
-spinner vanishing and leaving the user to find what it made.
+The status dot inside a card still breathes; that is the only moving part in grid
+view. `TestGridCardsDoNotAnimate` holds the breath phase still and asserts the frame
+is byte-identical over three seconds of animation ticks, with a slide and flashes
+forced on. It starts the slide directly rather than through a key press, because
+`startSlide` refuses in grid view and going through it left the render side untested
+— the first version of the test passed with a card trail re-added.
 
 **Colour is the only thing a terminal can fade.** There is no opacity, so an effect
 that would dissolve in a GUI has to walk its colour toward the background instead —

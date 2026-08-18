@@ -107,6 +107,7 @@ type Model struct {
 	overlayAnim   overlayAnim
 	breath        float64                         // phase of the status-dot breath, 0..1
 	breathOn      bool                            // whether the breath clock is currently ticking
+	slide         selectionSlide                  // highlight crossfading between rows
 	flashes       map[string]flashState           // rows fading after a state change
 	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
 	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
@@ -318,8 +319,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.statusErr = ""
+		prev := m.cursor
 		m.cursor = msg.index
-		return m, m.doPreview()
+		cmds := []tea.Cmd{m.doPreview()}
+		if m.startSlide(prev, len(m.filtered)) {
+			cmds = append(cmds, doAnimTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case mouseActivateMsg:
 		if msg.index < 0 || msg.index >= len(m.filtered) {
@@ -348,8 +354,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.viewMode == GridView {
 			step *= gridColumns(len(m.filtered))
 		}
+		prev := m.cursor
 		m.cursor = min(max(m.cursor+step, 0), len(m.filtered)-1)
-		return m, m.doPreview()
+		cmds := []tea.Cmd{m.doPreview()}
+		if m.startSlide(prev, len(m.filtered)) {
+			cmds = append(cmds, doAnimTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case spinner.TickMsg:
 		if m.pending == nil {
@@ -436,28 +447,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, doBreathTick()
 
 	case tickAnimMsg:
-		if !m.overlayAnim.step() {
+		// One transient clock for both; it stops when neither has anything left.
+		moving := m.overlayAnim.step()
+		if m.slide.step() {
+			moving = true
+		}
+		if !moving {
 			return m, nil
 		}
 		return m, doAnimTick()
 
 	case tea.KeyMsg:
 		wasOpen := m.overlayOpen()
+		prevCursor, prevLen := m.cursor, len(m.filtered)
+
 		next, cmd := m.handleKey(msg)
 		updated, ok := next.(Model)
 		if !ok {
 			return next, cmd
 		}
-		// Catching the transition here, rather than at each of the four places an
-		// overlay opens, means a fifth one cannot forget to animate.
+
+		cmds := []tea.Cmd{cmd}
+		// Catching these transitions here, rather than at each of the places that
+		// cause them, means a new overlay or a new navigation key cannot forget to
+		// animate.
 		if updated.animEnabled && !wasOpen && updated.overlayOpen() {
 			updated.overlayAnim.start()
-			return updated, tea.Batch(cmd, doAnimTick())
+			cmds = append(cmds, doAnimTick())
 		}
 		if !updated.overlayOpen() {
 			updated.overlayAnim.stop()
 		}
-		return updated, cmd
+		if updated.startSlide(prevCursor, prevLen) {
+			cmds = append(cmds, doAnimTick())
+		}
+		return updated, tea.Batch(cmds...)
 
 	case editorDoneMsg:
 		defer os.Remove(msg.path)
@@ -1516,9 +1540,12 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		// each one in a second Render, which both cost nine extra Render calls a
 		// row and still left a gap — the name and branch were rendered without it,
 		// so the selection tint broke either side of the name.
+		// The selection tint crossfades between the row the cursor left and the one
+		// it arrived at, so the highlight reads as travelling rather than jumping.
+		// Outside a slide this is the plain full-or-nothing it has always been.
 		rowBg := c.Surface
-		if i == m.cursor {
-			rowBg = c.SelBg
+		if t := m.slide.tintFor(i, m.cursor); t > 0 {
+			rowBg = theme.Mix(c.Surface, c.SelBg, t)
 		}
 		// A row that just changed state fades back from a tint, so a glance catches
 		// what happened even after the status dot has settled.

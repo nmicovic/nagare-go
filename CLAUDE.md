@@ -252,7 +252,8 @@ covers the arithmetic feeding through to the whole frame.
 
 ### Animation
 
-Three animations, on two clocks.
+Four animations, on two clocks — one transient at 30fps for motion, one slow at
+10fps for anything continuous.
 
 **Overlay entry** rises into place on a harmonica spring (`internal/picker/anim.go`),
 ~233ms over 8 frames at 30fps, transient. Off with `picker.animations = false`. The
@@ -272,6 +273,16 @@ two transitions the notification layer fires on, and never on first sight of a
 session — otherwise every waiting agent flashes the moment the picker opens. Grid
 cards flash their *border* rather than their fill: a card is large enough that
 tinting all of it would shout, and its border already carries focus.
+
+**Selection slide** (`selectionSlide` in `anim.go`) crossfades the row tint between
+the row the cursor left and the one it arrived at — 130ms, four frames on the
+transient clock, the two tints always summing to a whole so the highlight neither
+dims nor doubles mid-move. It is the only animation that fires on ordinary use, and
+that is the point: an overlay spring is invisible to anyone who never opens an
+overlay. It is skipped when the list length changed (a refilter renumbers rows, so
+the previous index no longer refers to the same session), in grid view (selection
+there is a card border, which does not crossfade legibly), and while an overlay has
+the screen.
 
 **Colour is the only thing a terminal can fade.** There is no opacity, so an effect
 that would dissolve in a GUI has to walk its colour toward the background instead —

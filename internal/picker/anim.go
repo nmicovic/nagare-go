@@ -91,6 +91,68 @@ func needsBreathing(sessions []models.Session) bool {
 	return false
 }
 
+// Selection slide.
+//
+// The highlight crossfades between the row it left and the row it arrived at,
+// rather than teleporting. This is the one animation that fires on ordinary use —
+// every press of an arrow key — which is exactly why it is worth having: an
+// overlay spring is invisible if you never open an overlay.
+//
+// It is short. The eye needs only a hint of travel to read the highlight as having
+// moved, and anything longer starts to feel like input lag while navigating a list
+// quickly.
+const (
+	// slideDuration is the crossfade length. Four frames at the transient clock's
+	// rate.
+	slideDuration = 130 * time.Millisecond
+)
+
+// selectionSlide crossfades the row tint from one row to another.
+type selectionSlide struct {
+	// from is the row index the highlight is leaving.
+	from int
+	// level runs 1 down to 0: the share of the tint still on `from`.
+	level float64
+	// active distinguishes a settled slide from one that starts on row 0.
+	active bool
+}
+
+func (s *selectionSlide) start(from int) {
+	*s = selectionSlide{from: from, level: 1, active: true}
+}
+
+// step advances the crossfade and reports whether it is still running.
+func (s *selectionSlide) step() bool {
+	if !s.active {
+		return false
+	}
+	step := float64(time.Second/animFPS) / float64(slideDuration)
+	if s.level-step <= 0 {
+		*s = selectionSlide{}
+		return false
+	}
+	s.level -= step
+	return true
+}
+
+// tintFor returns how much of the selection tint row i should carry, given where
+// the cursor is now. Outside a slide this is the plain 1-or-0 it always was.
+func (s selectionSlide) tintFor(i, cursor int) float64 {
+	if !s.active {
+		if i == cursor {
+			return 1
+		}
+		return 0
+	}
+	switch i {
+	case cursor:
+		return 1 - s.level
+	case s.from:
+		return s.level
+	}
+	return 0
+}
+
 // tickAnimMsg advances any running animation.
 type tickAnimMsg struct{}
 
@@ -149,4 +211,23 @@ func (a overlayAnim) offset() int {
 // overlayOpen reports whether any overlay is currently displayed.
 func (m Model) overlayOpen() bool {
 	return m.showHelp || m.showThemePick || m.promptMode || m.confirmMode
+}
+
+// startSlide begins a selection crossfade if the cursor actually moved within an
+// unchanged list, and reports whether the clock needs starting.
+//
+// The list length has to match: narrowing a search renumbers every row, so the
+// index the cursor came from no longer refers to the same session and a crossfade
+// there would light up something unrelated. Grid view is excluded because its
+// selection is a card border rather than a row tint, and a border does not
+// crossfade legibly.
+func (m *Model) startSlide(prevCursor, prevLen int) bool {
+	if !m.animEnabled || m.viewMode != ListView || m.overlayOpen() {
+		return false
+	}
+	if m.cursor == prevCursor || len(m.filtered) != prevLen {
+		return false
+	}
+	m.slide.start(prevCursor)
+	return true
 }

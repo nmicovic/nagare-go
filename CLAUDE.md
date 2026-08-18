@@ -281,7 +281,7 @@ covers the arithmetic feeding through to the whole frame.
 
 ### Animation
 
-Four animations, on two clocks — one transient at 30fps for motion, one slow at
+Six animations, on two clocks — one transient at 30fps for motion, one slow at
 10fps for anything continuous.
 
 **Overlay entry** rises into place on a harmonica spring (`internal/picker/anim.go`),
@@ -312,6 +312,23 @@ overlay. It is skipped when the list length changed (a refilter renumbers rows, 
 the previous index no longer refers to the same session), in grid view (selection
 there is a card border, which does not crossfade legibly), and while an overlay has
 the screen.
+
+**Grid entry** staggers the cards in when the grid is first shown — the one moment
+a lot of content appears at once with no way to tell what arrived. Cards rise on the
+same spring, three frames apart, from a shared precomputed offset table
+(`gridRiseOffsets`) rather than a spring per card: the motion is identical and only
+the start time differs, so a card's offset is a lookup at frame minus its own delay
+and the whole animation is a single int of state. `riseCard` shifts a card *inside*
+its cell, so the grid's layout and the mouse hit rectangles never move.
+
+In grid view the selection slide becomes a **dimming trail**: a gradient border has
+no partial form — `BorderForegroundBlend` takes stops, not an amount — so the card
+being left behind walks a solid border from the accent back to quiet chrome.
+
+A **worktree arrival** flashes the row its pane landed on, reusing the flash rather
+than inventing a second effect. The spinner sits above the list while the new pane
+arrives sorted somewhere inside it, so without the hand-off the wait ends by the
+spinner vanishing and leaving the user to find what it made.
 
 **Colour is the only thing a terminal can fade.** There is no opacity, so an effect
 that would dissolve in a GUI has to walk its colour toward the background instead —

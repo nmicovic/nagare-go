@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -164,3 +165,42 @@ func hasFlashTint(frame string, c theme.Colors) bool {
 	}
 	return false
 }
+
+// TestWorktreeArrivalFlashes — the spinner sits above the list and the new pane
+// lands somewhere inside it, sorted among everything else. Without a hand-off the
+// wait ends by the spinner vanishing and leaving the user to find what it made.
+func TestWorktreeArrivalFlashes(t *testing.T) {
+	m := driveModel(t, NewForTest(),
+		tea.WindowSizeMsg{Width: 120, Height: 30},
+		SessionsUpdatedMsg(waitingSet("ii")),
+	)
+	m.pending = &pendingWorktree{name: "feat-x", deadline: farFuture()}
+
+	// The scan that first reports the new pane.
+	arrived := append(waitingSet("ii"), models.Session{
+		Name: "repo/feat-x", SessionName: "repo", Path: "/tmp/repo/feat-x",
+		Status: models.StatusIdle, AgentType: models.AgentClaude,
+		Details: models.SessionDetails{RepoName: "repo", Worktree: "feat-x"},
+	})
+	m = driveModel(t, m, SessionsUpdatedMsg(arrived))
+
+	if m.pending != nil {
+		t.Error("pending worktree not cleared once its pane appeared")
+	}
+	if len(m.flashes) != 1 {
+		t.Fatalf("got %d flashes on arrival, want 1", len(m.flashes))
+	}
+	for key, f := range m.flashes {
+		if f.kind != flashDone {
+			t.Errorf("arrival flash is %v, want flashDone", f.kind)
+		}
+		if !strings.Contains(key, "repo") {
+			t.Errorf("flash landed on %q, not the new worktree's pane", key)
+		}
+	}
+	if m.arrived != "" {
+		t.Errorf("arrival marker not cleared: %q", m.arrived)
+	}
+}
+
+func farFuture() time.Time { return time.Now().Add(time.Hour) }

@@ -2,9 +2,11 @@ package picker
 
 import (
 	"math"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/harmonica"
 
 	"github.com/nemke/nagare-go/internal/models"
@@ -218,11 +220,14 @@ func (m Model) overlayOpen() bool {
 //
 // The list length has to match: narrowing a search renumbers every row, so the
 // index the cursor came from no longer refers to the same session and a crossfade
-// there would light up something unrelated. Grid view is excluded because its
-// selection is a card border rather than a row tint, and a border does not
-// crossfade legibly.
+// there would light up something unrelated.
+//
+// It applies in both views. A list row crossfades its background; a grid card
+// cannot, since a gradient border has no partial form, so the card being left
+// behind dims from the accent back to quiet chrome instead — a trail rather than a
+// crossfade, but the same signal.
 func (m *Model) startSlide(prevCursor, prevLen int) bool {
-	if !m.animEnabled || m.viewMode != ListView || m.overlayOpen() {
+	if !m.animEnabled || m.overlayOpen() {
 		return false
 	}
 	if m.cursor == prevCursor || len(m.filtered) != prevLen {
@@ -230,4 +235,105 @@ func (m *Model) startSlide(prevCursor, prevLen int) bool {
 	}
 	m.slide.start(prevCursor)
 	return true
+}
+
+// Grid entry.
+//
+// Switching to grid view drops a wall of cards on the screen at once, which is the
+// one moment in the picker where a lot of content appears simultaneously and there
+// is no way to tell what arrived. Staggering the cards gives the eye an order to
+// follow, and the order it follows is the order they are laid out in.
+//
+// The stagger is short. It is a hint that the cards arrived in sequence, not a
+// waiting animation — with nine cards and three frames apart, the last one starts a
+// quarter of a second after the first.
+const (
+	// gridRise is how far below its cell a card starts, in rows. Smaller than an
+	// overlay's: a card is short, and a long slide inside one looks like the content
+	// is scrolling rather than the card arriving.
+	gridRise = 3.0
+	// gridStagger is how many frames apart consecutive cards start.
+	gridStagger = 3
+)
+
+// gridRiseOffsets is the whole settle sequence of the card spring, precomputed.
+//
+// One shared table rather than a spring per card: the motion is identical for every
+// card and only its start time differs, so a card's offset at any frame is a lookup
+// at that frame minus its own delay. That keeps the animation state a single int
+// instead of one spring per visible card.
+var gridRiseOffsets = func() []int {
+	spring := harmonica.NewSpring(harmonica.FPS(animFPS), 16.0, 0.9)
+	pos, vel := gridRise, 0.0
+	offsets := []int{int(math.Round(pos))}
+	for i := 0; i < 4*animFPS; i++ {
+		pos, vel = spring.Update(pos, vel, 0)
+		offsets = append(offsets, int(math.Round(pos)))
+		if int(math.Round(pos)) == 0 && math.Abs(vel) < animRestVel {
+			break
+		}
+	}
+	return offsets
+}()
+
+// gridEntry tracks how far through the staggered arrival the grid is.
+type gridEntry struct {
+	frame  int
+	active bool
+}
+
+func (g *gridEntry) start() { *g = gridEntry{frame: 0, active: true} }
+func (g *gridEntry) stop()  { *g = gridEntry{} }
+
+// step advances the stagger and reports whether any of cards cards is still moving.
+func (g *gridEntry) step(cards int) bool {
+	if !g.active {
+		return false
+	}
+	g.frame++
+	if g.frame > (cards-1)*gridStagger+len(gridRiseOffsets) {
+		g.stop()
+		return false
+	}
+	return true
+}
+
+// offsetFor is how many rows down card i should currently be drawn.
+func (g gridEntry) offsetFor(i int) int {
+	if !g.active {
+		return 0
+	}
+	at := g.frame - i*gridStagger
+	switch {
+	case at < 0:
+		// Not started yet: hold at the bottom of the rise rather than appearing
+		// early, so the stagger is visible as an order rather than a blur.
+		return int(gridRise)
+	case at >= len(gridRiseOffsets):
+		return 0
+	default:
+		return gridRiseOffsets[at]
+	}
+}
+
+// riseCard shifts a rendered card down by offset rows inside its own cell, filling
+// above it and clipping what falls off the bottom, so the card appears to rise into
+// place without the grid's layout moving around it.
+func riseCard(card string, offset, width, height int, fill lipgloss.Style) string {
+	if offset <= 0 {
+		return card
+	}
+	lines := strings.Split(card, "\n")
+	blank := fill.Width(width).Render("")
+	shifted := make([]string, 0, height)
+	for i := 0; i < offset && len(shifted) < height; i++ {
+		shifted = append(shifted, blank)
+	}
+	for _, l := range lines {
+		if len(shifted) >= height {
+			break
+		}
+		shifted = append(shifted, l)
+	}
+	return strings.Join(shifted, "\n")
 }

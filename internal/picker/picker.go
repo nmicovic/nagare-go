@@ -108,6 +108,8 @@ type Model struct {
 	breath        float64                         // phase of the status-dot breath, 0..1
 	breathOn      bool                            // whether the breath clock is currently ticking
 	slide         selectionSlide                  // highlight crossfading between rows
+	gridEnter     gridEntry                       // staggered arrival of grid cards
+	arrived       string                          // worktree whose pane just appeared, to flash once it is listed
 	history       map[string][]uint8              // recent activity levels per session, for sparklines
 	flashes       map[string]flashState           // rows fading after a state change
 	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
@@ -394,6 +396,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = []models.Session(msg)
 		if m.pending != nil && m.pending.satisfiedBy(m.sessions) {
 			log.Info("worktree %q is live", m.pending.name)
+			// Hand the eye off from the spinner to the row that just appeared. The
+			// spinner sits above the list and the new pane arrives somewhere inside
+			// it, sorted among everything else, so without this the wait ends by the
+			// spinner simply vanishing and leaving the user to find what it made.
+			m.arrived = m.pending.name
 			m.pending = nil
 		}
 		m.workCache = make(map[string]git.Work) // recompute work against the new scan
@@ -404,6 +411,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.prevStatus = statusesOf(m.sessions)
 		recordActivity(m.history, m.sessions)
+		// A worktree that has just come up flashes like any other arrival worth
+		// noticing, reusing the same fade rather than inventing a second one.
+		if m.arrived != "" {
+			for _, sess := range m.sessions {
+				if sess.Details.Worktree == m.arrived {
+					m.flashes[sessionKey(sess)] = flashState{kind: flashDone, level: 1}
+					m.arrived = ""
+					break
+				}
+			}
+		}
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
@@ -455,6 +473,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.slide.step() {
 			moving = true
 		}
+		if m.gridEnter.step(len(m.filtered)) {
+			moving = true
+		}
 		if !moving {
 			return m, nil
 		}
@@ -462,6 +483,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		wasOpen := m.overlayOpen()
+		wasMode := m.viewMode
 		prevCursor, prevLen := m.cursor, len(m.filtered)
 
 		next, cmd := m.handleKey(msg)
@@ -483,6 +505,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if updated.startSlide(prevCursor, prevLen) {
 			cmds = append(cmds, doAnimTick())
+		}
+		// Arriving in grid view staggers the cards in. Detected here for the same
+		// reason as the others: whatever switches views cannot forget to animate.
+		if updated.animEnabled && wasMode == ListView && updated.viewMode == GridView {
+			updated.gridEnter.start()
+			cmds = append(cmds, doAnimTick())
+		}
+		if updated.viewMode != GridView {
+			updated.gridEnter.stop()
 		}
 		return updated, tea.Batch(cmds...)
 
@@ -1885,6 +1916,10 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 		startRow = cursorRow - visibleRows + 1
 	}
 
+	// Fill for the gap above a card that has not finished rising: the space between
+	// cards is canvas, so that is what shows through.
+	cardFill := lipgloss.NewStyle().Background(canvasBg())
+
 	// Build rows of cells
 	var rows []string
 	var cards []cardHit
@@ -1931,23 +1966,30 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			// it earns the most: a wall of cards is exactly the situation where
 			// knowing which agent has been busy matters, and the status dot alone
 			// cannot say.
+			// 5 = leading space, two separating spaces, and the double space
+			// before the status label.
+			chrome := lipgloss.Width(dot) + lipgloss.Width(agentBadge) +
+				lipgloss.Width(statusLabel) + 5
+
+			// The trace yields to the name. A card narrow enough that both cannot fit
+			// gets no trace: forcing one in left the name at its minimum and the
+			// header still over budget, which wrapped it and cost the card a row.
 			spark := ""
+			const sparkGap = 2
 			if hist := m.history[sessionKey(s)]; len(hist) > 1 {
-				if w := sparkWidth(textWidth / 4); w > 0 {
+				room := textWidth - chrome - minNameWidth - sparkGap
+				if w := sparkWidth(min(room, textWidth/4)); w > 0 {
 					spark = sparklineOn(hist, w, c.Surface)
 				}
 			}
-			sparkRoom := lipgloss.Width(spark)
-			if sparkRoom > 0 {
-				sparkRoom += 2 // breathing room between the status label and the trace
+			sparkRoom := 0
+			if spark != "" {
+				sparkRoom = lipgloss.Width(spark) + sparkGap
 			}
 
-			// 5 = leading space, two separating spaces, and the double space
-			// before the status label.
-			fixed := lipgloss.Width(dot) + lipgloss.Width(agentBadge) +
-				lipgloss.Width(statusLabel) + 5 + sparkRoom
 			header := fmt.Sprintf(" %s %s %s  %s", dot,
-				truncate(s.Name, max(textWidth-fixed, minNameWidth)), agentBadge, statusLabel)
+				truncate(s.Name, max(textWidth-chrome-sparkRoom, minNameWidth)),
+				agentBadge, statusLabel)
 			if spark != "" {
 				pad := max(textWidth-lipgloss.Width(header)-lipgloss.Width(spark), 1)
 				header += strings.Repeat(" ", pad) + spark
@@ -2005,6 +2047,12 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			// The selected card takes the same gradient sweep as the focused
 			// panel in list view, so "this is where you are" looks identical in
 			// both modes. Unselected cards stay on quiet chrome.
+			//
+			// While the selection is moving, the card being left behind dims from the
+			// accent back to that quiet border rather than dropping to it in one
+			// frame. A gradient cannot be partially applied — BorderForegroundBlend
+			// takes stops, not an amount — so the outgoing card gets a solid border
+			// walked between the two, which is what a fading trail looks like anyway.
 			cellStyle := lipgloss.NewStyle().
 				Background(c.Surface).
 				Foreground(c.Foreground).
@@ -2014,6 +2062,9 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				Padding(1)
 			if idx == m.cursor {
 				cellStyle = cellStyle.BorderForegroundBlend(c.GradientFrom, c.GradientTo)
+			} else if trail := m.slide.tintFor(idx, m.cursor); trail > 0 {
+				cellStyle = cellStyle.BorderForeground(
+					theme.Mix(c.Border, c.GradientFrom, trail))
 			}
 			// A flashing card lights its border rather than its fill: a card is large
 			// enough that tinting all of it would shout, and the border is already
@@ -2023,6 +2074,10 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 					BorderForeground(flashTint(c.Border, f, flashBorderDepth))
 			}
 			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
+			// Cards rise into their cells in sequence when the grid is first shown.
+			// The cell itself never moves, so the grid's layout — and the hit
+			// rectangles below — stay put while the card slides inside it.
+			cell = riseCard(cell, m.gridEnter.offsetFor(idx), cellWidth, cellHeight, cardFill)
 
 			// The card's bounds in frame coordinates: one row down for the search
 			// bar, then whole cells from there, relative to the first visible row.

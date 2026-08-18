@@ -225,6 +225,29 @@ the clamp is what hides the overflow. `internal/popup/layout_test.go`,
 `internal/picker/grid_test.go` all check exact frame size across a spread of
 terminal sizes, plus that hint bars survive and boxes are closed.
 
+### Activity sparklines
+
+The picker showed what every agent was doing *now* and nothing about what it had
+been doing — and those are different questions. An agent grinding for ten minutes
+and one that woke up four seconds ago are identical in a list of status dots, and
+which is which changes what you do about it.
+
+Each scan appends one sample per session to `Model.history`, so the trace costs
+nothing beyond the polling already happening. `internal/picker/spark.go` renders it
+as braille: a cell is 2x4 dots, so two samples wide and four levels tall per
+character. Nothing else in Unicode is that dense, and unlike the image protocols it
+needs no capability negotiation and no tmux passthrough — it is just text.
+
+Status maps to bar height with waiting *above* running, so the tallest bars are the
+moments the user was needed, and each cell takes the louder of its two samples: one
+moment of waiting inside a long run of work is the thing worth seeing, not something
+to average away. Colour repeats the status colours, so the trace reads without a
+legend. Shown in the detail pane as a `Recent` row and pinned right of each grid
+card's header.
+
+History is trimmed to `sparkSamples` and sessions that disappear are pruned, since
+the picker runs for hours.
+
 ### Grid cards
 
 Card height arithmetic must be *measured*, never assumed. Three bugs came from
@@ -240,6 +263,12 @@ assuming it:
   scrolls to keep the selected card visible, like the list view.
 - `innerWidth = cellWidth - 6` over-subtracted: `Padding(1)` is one cell per side,
   so two, not four. The separator fell two cells short of its card.
+
+A card's header is budgeted against the **text column** beside the agent art, not
+the full card width. Sizing it against the card and then rendering it into the
+narrower column is what wrapped the header — a latent bug that only surfaced once
+the sparkline made the header wide enough to hit it. `gridModel` in the tests seeds
+activity history for exactly that reason, so the 50-case card test covers the path.
 
 The header is kept to one row by truncating the name, as list rows do; the meta
 line may wrap and the preview budget is derived from its measured height. If even

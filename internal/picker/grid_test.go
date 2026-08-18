@@ -21,8 +21,17 @@ func gridModel(t *testing.T, w, h int, sessions []models.Session) Model {
 	)
 	m.viewMode = GridView
 	m.gridPreviews = map[string]string{}
-	for _, s := range m.filtered {
+	for i, s := range m.filtered {
 		m.gridPreviews[sessionKey(s)] = strings.Repeat("a preview line of output\n", 30)
+		// Seed activity history so the card tests cover the sparkline path. Without
+		// it they missed a header sized against the card width but rendered into the
+		// narrower column beside the agent art, which wrapped the header and made
+		// the card a row too tall.
+		trace := make([]uint8, 0, sparkSamples)
+		for j := 0; j < sparkSamples; j++ {
+			trace = append(trace, []uint8{1, 3, 4, 3}[(i+j)%4])
+		}
+		m.history[sessionKey(s)] = trace
 	}
 	return m
 }

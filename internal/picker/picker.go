@@ -108,6 +108,7 @@ type Model struct {
 	breath        float64                         // phase of the status-dot breath, 0..1
 	breathOn      bool                            // whether the breath clock is currently ticking
 	slide         selectionSlide                  // highlight crossfading between rows
+	history       map[string][]uint8              // recent activity levels per session, for sparklines
 	flashes       map[string]flashState           // rows fading after a state change
 	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
 	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
@@ -140,6 +141,7 @@ func New() Model {
 		promptInput:  pi,
 		workCache:    make(map[string]git.Work),
 		flashes:      make(map[string]flashState),
+		history:      make(map[string][]uint8),
 		prevStatus:   make(map[string]models.SessionStatus),
 		spinner:      newSpinner(),
 	}
@@ -401,6 +403,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flashes[key] = f
 		}
 		m.prevStatus = statusesOf(m.sessions)
+		recordActivity(m.history, m.sessions)
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
@@ -1719,6 +1722,16 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if s.Details.LastActivity != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), subtleStyle().Render(formatTimeAgo(s.Details.LastActivity))))
 	}
+	// Recent activity, as a braille trace: what this agent has been doing, which
+	// the status dot cannot say. Only worth drawing once there is more than a
+	// single sample to compare against.
+	if hist := m.history[sessionKey(s)]; len(hist) > 1 {
+		w := sparkWidth(innerWidth - 20)
+		if w > 0 {
+			info.WriteString(fmt.Sprintf("  %s  %s  %s\n", label.Render("Recent"),
+				sparklineOn(hist, w, c.Surface), sparkLegend()))
+		}
+	}
 	if s.LastMessage != "" {
 		msg := s.LastMessage
 		maxLen := innerWidth - 30
@@ -1890,6 +1903,17 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				innerWidth = 10
 			}
 
+			// The agent art sits to the right of the header block, so the header's
+			// real budget is the text column beside it — not the full card width.
+			// Sizing the header against innerWidth and then rendering it into the
+			// narrower column is what made it wrap.
+			art := renderAgentArtSmall(s.AgentType)
+			artWidth := lipgloss.Width(art)
+			textWidth := innerWidth
+			if art != "" && innerWidth > 30 {
+				textWidth = innerWidth - artWidth - 1
+			}
+
 			// Header: status dot + name + agent badge
 			dot := statusDotOn(s.Status, m.breath, c.Surface)
 			statusLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render(models.StatusLabel(s.Status))
@@ -1903,11 +1927,31 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			// badge and status leave, exactly as list rows do. Letting it wrap made
 			// a narrow card taller than its cell, and a name broken across two rows
 			// is unreadable anyway.
+			// An activity trace pinned to the right of the header. Grid view is where
+			// it earns the most: a wall of cards is exactly the situation where
+			// knowing which agent has been busy matters, and the status dot alone
+			// cannot say.
+			spark := ""
+			if hist := m.history[sessionKey(s)]; len(hist) > 1 {
+				if w := sparkWidth(textWidth / 4); w > 0 {
+					spark = sparklineOn(hist, w, c.Surface)
+				}
+			}
+			sparkRoom := lipgloss.Width(spark)
+			if sparkRoom > 0 {
+				sparkRoom += 2 // breathing room between the status label and the trace
+			}
+
 			// 5 = leading space, two separating spaces, and the double space
 			// before the status label.
-			fixed := lipgloss.Width(dot) + lipgloss.Width(agentBadge) + lipgloss.Width(statusLabel) + 5
+			fixed := lipgloss.Width(dot) + lipgloss.Width(agentBadge) +
+				lipgloss.Width(statusLabel) + 5 + sparkRoom
 			header := fmt.Sprintf(" %s %s %s  %s", dot,
-				truncate(s.Name, max(innerWidth-fixed, minNameWidth)), agentBadge, statusLabel)
+				truncate(s.Name, max(textWidth-fixed, minNameWidth)), agentBadge, statusLabel)
+			if spark != "" {
+				pad := max(textWidth-lipgloss.Width(header)-lipgloss.Width(spark), 1)
+				header += strings.Repeat(" ", pad) + spark
+			}
 
 			// Meta line: path + git branch. Allowed to wrap — seeing the whole path
 			// is worth a row — with the card's preview budget derived from however
@@ -1917,12 +1961,8 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				meta += mutedStyle().Render(fmt.Sprintf("  (%s)", s.Details.GitBranch))
 			}
 
-			// Small agent art floated to the right of the header
-			art := renderAgentArtSmall(s.AgentType)
-			artWidth := lipgloss.Width(art)
 			topBlock := header + "\n" + meta
 			if art != "" && innerWidth > 30 {
-				textWidth := innerWidth - artWidth - 1
 				textCol := lipgloss.NewStyle().Width(textWidth).Background(c.Surface).Render(topBlock)
 				gap := lipgloss.NewStyle().Width(1).Background(c.Surface).Render("")
 				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, textCol, gap, art)

@@ -165,3 +165,64 @@ func TestGridFrameIsExactlySized(t *testing.T) {
 		}
 	}
 }
+
+// TestDetailPanelIsAClosedBox guards the third instance of the measure-don't-assume
+// bug in this package.
+//
+// detailOuter was derived from strings.Count(content, "\n"), which counts string
+// lines rather than rendered rows. A path too long for a narrow panel occupies two
+// rows while counting as one, leaving the panel a row short — and fitBox then
+// clipped its bottom border away. The wide layout was immune only by accident,
+// because JoinHorizontal renders the info column at a fixed width first, so its
+// wraps were already newlines by the time they were counted.
+func TestDetailPanelIsAClosedBox(t *testing.T) {
+	sessions := [][]models.Session{
+		{{
+			Name: "svc", SessionName: "svc",
+			Path:      "/home/nemke/Projects/deeply/nested/monorepo/packages/service-gateway-internal",
+			Status:    models.StatusIdle,
+			AgentType: models.AgentClaude,
+		}},
+		{{
+			Name: "cosmic-platform-frontend/claude_01", SessionName: "cosmic-platform-frontend",
+			Path:   "/home/nemke/Projects/cosmic-platform-frontend",
+			Status: models.StatusWaitingInput, AgentType: models.AgentClaude,
+			Details: models.SessionDetails{
+				RepoName: "cosmic-platform-frontend", Worktree: "feat/procosmic",
+				GitBranch: "picker-depth-and-mouse", LastActivity: "2026-08-18T06:00:00Z",
+			},
+			LastMessage: "a fairly long last assistant message that has to wrap somewhere",
+		}},
+	}
+
+	// Narrow widths matter most: the detail block is only left unwrapped below the
+	// threshold where the agent art is dropped.
+	for si, set := range sessions {
+		for _, w := range []int{200, 120, 80, 60, 55, 50, 45, 40, 35} {
+			for _, h := range []int{60, 40, 30, 20} {
+				t.Run(fmt.Sprintf("set%d/%dx%d", si, w, h), func(t *testing.T) {
+					m := driveModel(t, NewForTest(),
+						tea.WindowSizeMsg{Width: w, Height: h},
+						SessionsUpdatedMsg(set),
+					)
+					out := m.viewRight(w-w/5, h-2)
+
+					var tops, bottoms int
+					for _, row := range strings.Split(out, "\n") {
+						switch pl := ansi.Strip(row); {
+						case strings.HasPrefix(pl, "╭"):
+							tops++
+						case strings.HasPrefix(pl, "╰"):
+							bottoms++
+						}
+					}
+					// Two stacked boxes: the detail panel and the preview well.
+					if tops != 2 || bottoms != 2 {
+						t.Errorf("right column has %d box tops and %d bottoms, want 2 and 2",
+							tops, bottoms)
+					}
+				})
+			}
+		}
+	}
+}

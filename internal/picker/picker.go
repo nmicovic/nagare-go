@@ -1676,8 +1676,16 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	// Size detail panel to fit its content exactly. lipgloss v2 Height is the
 	// total rendered height, so it must cover the content plus this style's
 	// vertical padding (2) and border (2).
-	detailContent := detail.String()
-	detailLines := strings.Count(detailContent, "\n") + 1
+	//
+	// Wrap the content to the panel width *before* measuring it. Counting "\n"
+	// in the unwrapped string counts string lines, not rendered rows, and a path
+	// too long for a narrow panel occupies two rows while counting as one — which
+	// left the panel a row short and let fitBox clip its bottom border away. The
+	// wide branch above happened to be immune only because JoinHorizontal renders
+	// the info block at a fixed width first, so its wraps were already real
+	// newlines by the time they were counted.
+	detailContent := lipgloss.NewStyle().Width(innerWidth).Render(detail.String())
+	detailLines := lipgloss.Height(detailContent)
 	detailOuter := detailLines + 4
 	if detailOuter > outerHeight/2 {
 		// Cap at half the panel and clamp content to fit.

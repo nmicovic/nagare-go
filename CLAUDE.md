@@ -180,6 +180,51 @@ The footer shows only the keys valid for the current mode and selection, trimmed
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
 
+### Layout: measure, never assume
+
+Every layout bug found so far has been the same bug — a rendered height or width
+derived by arithmetic or by counting string lines, instead of measured with
+`lipgloss.Height` / `lipgloss.Width` after wrapping. It is worth stating as a rule
+because the failures are invisible: each of the four TUIs clamps its assembled
+frame as a safety net, so an over-budget layout does not smear the screen, it
+silently loses its bottom row — which is where hint bars and panel borders live.
+
+Two habits follow from it:
+
+1. **Wrap, then measure.** `lipgloss.Height(style.Width(w).Render(s))`, not
+   `strings.Count(s, "\n") + 1`. A single string line occupies several rows once
+   it is too long for its panel.
+2. **Window by rows, not by items.** A list entry may be two rows, or three when
+   it wraps. Treating a row budget as an item count over-renders by whatever the
+   average entry height is.
+
+Found and fixed by an audit of all four TUIs:
+
+| Where | Assumed | Symptom |
+|---|---|---|
+| `picker` list header | header is 4 rows | stats line wraps; last rows pushed through the bottom border |
+| `picker` help overlay | box is `height*2/3` | ~44 rows of content silently clipped; also pinned the entry animation to y=0 |
+| `picker` grid card | header is 2 rows | card one row too tall; **bottom border clipped off** |
+| `picker` grid rows | clamp height, keep row count | grid taller than the frame; lower cards cut off |
+| `picker` grid card width | `Padding(1)` is 4 cells | separator two cells short |
+| `picker` detail panel | `strings.Count("\n")` | narrow panel loses its bottom border |
+| `popup` | `height - 7`, `width - 4` | hint bar clipped below ~70 cols; separators short |
+| `popup` hint bar | padding floored at 1 | bar wider than the popup, wrapped, then clipped |
+| `notifs` list | row budget as item count | 92 rows into a 50-row frame; hint bar never visible |
+| `notifs` settings | `height` ignored entirely | overflowed any terminal under ~19 rows |
+| `notifs` hint bar | trimmed from the end | dropped "Esc Quit", leaving no visible way out |
+| `newsession`, `quickproto` | no frame clamp at all | huh lays out at ~98 cells; every row wrapped on narrower terminals |
+
+A hint bar's exit key is reserved space and never trimmed — the picker footer keeps
+`F1 More · Esc Quit`, the notification centre keeps `Esc Quit`. Trimming from the
+end takes the way out with it.
+
+Layout tests assert on the **unclamped** frame (`m.view()`, not `m.View()`), since
+the clamp is what hides the overflow. `internal/popup/layout_test.go`,
+`internal/notifs/layout_test.go` and the box-integrity tests in
+`internal/picker/grid_test.go` all check exact frame size across a spread of
+terminal sizes, plus that hint bars survive and boxes are closed.
+
 ### Grid cards
 
 Card height arithmetic must be *measured*, never assumed. Three bugs came from

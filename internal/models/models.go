@@ -30,6 +30,8 @@ const (
 	AgentCrush AgentType = "crush"
 	// AgentPi represents the pi coding agent.
 	AgentPi AgentType = "pi"
+	// AgentCodex represents the OpenAI Codex coding agent.
+	AgentCodex AgentType = "codex"
 	// AgentUnknown represents an unrecognized agent.
 	AgentUnknown AgentType = "unknown"
 )
@@ -112,7 +114,7 @@ func StatusLabel(s SessionStatus) string {
 func AgentLabel(a AgentType) string {
 	switch a {
 	case AgentClaude:
-		return "Claude"
+		return "Claude Code"
 	case AgentOpenCode:
 		return "OpenCode"
 	case AgentGemini:
@@ -121,6 +123,8 @@ func AgentLabel(a AgentType) string {
 		return "Crush"
 	case AgentPi:
 		return "Pi"
+	case AgentCodex:
+		return "Codex"
 	default:
 		return "Unknown"
 	}
@@ -139,6 +143,8 @@ func AgentColor(a AgentType) string {
 		return "#ff5fd7"
 	case AgentPi:
 		return "#a78bfa"
+	case AgentCodex:
+		return "#10a37f"
 	default:
 		return "#565f89"
 	}
@@ -157,6 +163,8 @@ func AgentBgColor(a AgentType) string {
 		return "#3b1a33"
 	case AgentPi:
 		return "#241b3b"
+	case AgentCodex:
+		return "#12352d"
 	default:
 		return ""
 	}

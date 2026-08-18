@@ -253,21 +253,25 @@ func (m Model) view() string {
 
 	var b strings.Builder
 
-	// Tab bar
-	b.WriteString(m.renderTabBar())
-	b.WriteString("\n")
-
-	// Content
-	contentHeight := m.height - 3 // tab bar + hint bar + padding
-	if m.tab == 0 {
-		b.WriteString(m.renderNotifications(contentHeight))
-	} else {
-		b.WriteString(m.renderSettings(contentHeight))
+	// Measure the chrome rather than assuming it is three rows: the hint bar
+	// wraps to two on a narrow terminal, and an assumed figure left the content
+	// over-budget with the clamp in View silently eating the bar.
+	tabBar := m.renderTabBar()
+	hintBar := m.renderHintBar()
+	contentHeight := m.height - lipgloss.Height(tabBar) - lipgloss.Height(hintBar)
+	if contentHeight < 1 {
+		contentHeight = 1
 	}
 
-	// Hint bar at bottom
+	b.WriteString(tabBar)
 	b.WriteString("\n")
-	b.WriteString(m.renderHintBar())
+	if m.tab == 0 {
+		b.WriteString(m.renderNotifications(m.width, contentHeight))
+	} else {
+		b.WriteString(m.renderSettings(m.width, contentHeight))
+	}
+	b.WriteString("\n")
+	b.WriteString(hintBar)
 
 	return lipgloss.NewStyle().
 		Background(c.Background).
@@ -299,35 +303,51 @@ func (m Model) renderTabBar() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, tab1, "  ", tab2)
 }
 
-func (m Model) renderNotifications(height int) string {
+// rowWindow picks which blocks to show so the block at cursor stays visible and
+// the total rendered height stays within height rows.
+//
+// Windowing has to be measured in rows and not counted in items. A notification
+// is two rows — three when its message wraps — so treating the row budget as an
+// item count rendered about twice the rows it had, and the clamp in View hid that
+// by cutting the hint bar off the bottom of the screen.
+//
+// It grows upward first, which pins the cursor to the bottom edge when scrolling
+// down — the same behaviour as the picker's list.
+func rowWindow(heights []int, cursor, height int) (start, end int) {
+	if len(heights) == 0 {
+		return 0, 0
+	}
+	cursor = min(max(cursor, 0), len(heights)-1)
+
+	used := heights[cursor]
+	start, end = cursor, cursor+1
+	for start > 0 && used+heights[start-1] <= height {
+		start--
+		used += heights[start]
+	}
+	for end < len(heights) && used+heights[end] <= height {
+		used += heights[end]
+		end++
+	}
+	return start, end
+}
+
+func (m Model) renderNotifications(width, height int) string {
 	if len(m.items) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(theme.Current().Colors.Muted).
 			Render("  No notifications")
 	}
 
-	listHeight := height - 2
-	if listHeight < 1 {
-		listHeight = 1
+	blocks := make([]string, len(m.items))
+	heights := make([]int, len(m.items))
+	for i, item := range m.items {
+		blocks[i] = m.renderNotificationItem(item, i == m.cursor)
+		heights[i] = lipgloss.Height(lipgloss.NewStyle().Width(width).Render(blocks[i]))
 	}
 
-	start := 0
-	if m.cursor >= listHeight {
-		start = m.cursor - listHeight + 1
-	}
-	end := start + listHeight
-	if end > len(m.items) {
-		end = len(m.items)
-	}
-
-	var lines []string
-	for i := start; i < end; i++ {
-		item := m.items[i]
-		line := m.renderNotificationItem(item, i == m.cursor)
-		lines = append(lines, line)
-	}
-
-	return strings.Join(lines, "\n")
+	start, end := rowWindow(heights, m.cursor, height)
+	return strings.Join(blocks[start:end], "\n")
 }
 
 func (m Model) renderNotificationItem(item notifications.Notification, selected bool) string {
@@ -371,13 +391,31 @@ func (m Model) renderNotificationItem(item notifications.Notification, selected 
 	return line1 + "\n" + line2
 }
 
-func (m Model) renderSettings(height int) string {
+// renderSettings lays the settings list out in at most height rows, scrolled to
+// keep the selected item visible.
+//
+// It used to ignore height entirely and always emit its full ~19 rows, which
+// overflowed any terminal shorter than that — and since the frame clamp trims
+// from the bottom, the row it removed was the hint bar.
+func (m Model) renderSettings(width, height int) string {
 	c := theme.Current().Colors
 	sectionHeader := lipgloss.NewStyle().Foreground(c.Accent).Bold(true)
 
-	var lines []string
+	// Rows rather than lines: a long label on a narrow terminal wraps, and a
+	// window over unwrapped lines would be over budget again. Wrapping here also
+	// extends the selected item's highlight across the full row, as list rows do
+	// elsewhere.
+	wrap := lipgloss.NewStyle().Width(width)
+	var rows []string
+	cursorRow := 0
+	push := func(s string, isCursor bool) {
+		if isCursor {
+			cursorRow = len(rows)
+		}
+		rows = append(rows, strings.Split(wrap.Render(s), "\n")...)
+	}
 
-	lines = append(lines, sectionHeader.Render("  Master"))
+	push(sectionHeader.Render("  Master"), false)
 
 	for i := 0; i < 14; i++ {
 		item := m.getSettingsItem(i)
@@ -387,29 +425,32 @@ func (m Model) renderSettings(height int) string {
 
 		// Separators + section headers
 		if item.label == "" {
-			lines = append(lines, "")
+			push("", false)
 			if i == 1 {
-				lines = append(lines, sectionHeader.Render("  Needs Input"))
+				push(sectionHeader.Render("  Needs Input"), false)
 			}
 			if i == 7 {
-				lines = append(lines, sectionHeader.Render("  Task Complete"))
+				push(sectionHeader.Render("  Task Complete"), false)
 			}
 			continue
 		}
 
-		line := m.renderSettingsItem(item, i == m.cursor)
-		lines = append(lines, line)
+		push(m.renderSettingsItem(item, i == m.cursor), i == m.cursor)
 	}
 
 	// Add edit input if in edit mode
 	if m.editMode {
-		lines = append(lines, "")
-		lines = append(lines, lipgloss.NewStyle().
-			Foreground(c.Primary).
-			Render("  Edit: "+m.editInput.View()))
+		push("", false)
+		push(lipgloss.NewStyle().Foreground(c.Primary).
+			Render("  Edit: "+m.editInput.View()), false)
 	}
 
-	return strings.Join(lines, "\n")
+	start := 0
+	if cursorRow >= height {
+		start = cursorRow - height + 1
+	}
+	end := min(start+height, len(rows))
+	return strings.Join(rows[start:end], "\n")
 }
 
 func (m Model) renderSettingsItem(item *settingsItem, selected bool) string {
@@ -451,13 +492,26 @@ func (m Model) renderHintBar() string {
 		parts = append(parts, key.Render("Enter")+" Toggle/Edit")
 	}
 	parts = append(parts, key.Render("1/2")+" Tab")
-	parts = append(parts, key.Render("Esc")+" Quit")
 
-	bar := strings.Join(parts, sep)
+	// The way out is reserved space, never trimmed. The bar has to fit one row —
+	// it wrapped to two on a narrow terminal, pushing the frame over its height
+	// and costing the content a row it had already budgeted — but trimming from
+	// the end took "Esc Quit" with it, leaving no visible way to leave.
+	quit := key.Render("Esc") + " Quit"
+	budget := m.width - 2 - lipgloss.Width(quit) - lipgloss.Width(sep)
+	for len(parts) > 0 && lipgloss.Width(strings.Join(parts, sep)) > budget {
+		parts = parts[:len(parts)-1]
+	}
+	bar := quit
+	if len(parts) > 0 {
+		bar = strings.Join(append(parts, quit), sep)
+	}
+
 	return lipgloss.NewStyle().
 		Foreground(c.Muted).
 		Background(c.Background).
 		Width(m.width).
+		MaxHeight(1).
 		Padding(0, 1).
 		Render(bar)
 }

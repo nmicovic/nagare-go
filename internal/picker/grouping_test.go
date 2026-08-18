@@ -39,19 +39,20 @@ func TestBuildRowsUngrouped(t *testing.T) {
 	}
 	rows := buildRows(sessions)
 
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want 2 (no headers for singletons)", len(rows))
+	if len(rows) != 5 {
+		t.Fatalf("got %d rows, want 5 (two singleton blocks + spacer)", len(rows))
 	}
-	for i, r := range rows {
-		if r.SessionIdx != i {
-			t.Errorf("row %d SessionIdx = %d, want %d", i, r.SessionIdx, i)
-		}
-		if r.Glyph != "" {
-			t.Errorf("row %d has glyph %q, want none", i, r.Glyph)
+	for i, rowIdx := range []int{1, 4} {
+		r := rows[rowIdx]
+		if r.SessionIdx != i || r.Glyph != glyphEnd {
+			t.Errorf("singleton child %d = %+v, want session %d with end glyph", i, r, i)
 		}
 	}
-	if rows[0].Label != "nagare" {
-		t.Errorf("label = %q, want the full name", rows[0].Label)
+	if rows[0].Group != "nagare" || rows[1].Label != "claude_01" {
+		t.Errorf("first singleton rows = %+v / %+v", rows[0], rows[1])
+	}
+	if rows[2].SessionIdx != spacerRow {
+		t.Errorf("row 2 = %+v, want project spacer", rows[2])
 	}
 }
 
@@ -99,9 +100,9 @@ func TestBuildRowsTwoGroupsAndSingleton(t *testing.T) {
 	}
 	rows := buildRows(sessions)
 
-	// 2 headers + 4 children + 1 singleton
-	if len(rows) != 7 {
-		t.Fatalf("got %d rows, want 7", len(rows))
+	// 3 headers + 5 children + 2 inter-project spacers
+	if len(rows) != 10 {
+		t.Fatalf("got %d rows, want 10", len(rows))
 	}
 	var headers []string
 	for _, r := range rows {
@@ -109,14 +110,34 @@ func TestBuildRowsTwoGroupsAndSingleton(t *testing.T) {
 			headers = append(headers, r.Group)
 		}
 	}
-	if len(headers) != 2 || headers[0] != "frontend" || headers[1] != "backend" {
-		t.Errorf("headers = %v, want [frontend backend]", headers)
+	if len(headers) != 3 || headers[0] != "frontend" || headers[1] != "nagare" || headers[2] != "backend" {
+		t.Errorf("headers = %v, want [frontend nagare backend]", headers)
 	}
-	// The singleton keeps its full name and gets no header.
+	// The singleton gets the same header/child hierarchy as every other project.
 	for _, r := range rows {
-		if r.SessionIdx == 2 && (r.Label != "nagare" || r.Glyph != "") {
-			t.Errorf("singleton row = %+v, want plain nagare", r)
+		if r.SessionIdx == 2 && (r.Label != "claude_01" || r.Glyph != glyphEnd) {
+			t.Errorf("singleton row = %+v, want indented claude_01", r)
 		}
+	}
+}
+
+func TestBuildRowsAddsSpaceOnlyBetweenGroups(t *testing.T) {
+	rows := buildRows([]models.Session{
+		wt("one", "a", models.StatusIdle),
+		wt("one", "b", models.StatusIdle),
+		solo("two", models.StatusIdle),
+	})
+	spacers := 0
+	for i, row := range rows {
+		if row.SessionIdx == spacerRow {
+			spacers++
+			if i == 0 || i == len(rows)-1 {
+				t.Errorf("spacer appears at list edge: %+v", rows)
+			}
+		}
+	}
+	if spacers != 1 {
+		t.Errorf("spacers = %d, want one between two groups", spacers)
 	}
 }
 
@@ -295,6 +316,28 @@ func TestRenderListViewFitsWorktreeNames(t *testing.T) {
 	for _, line := range strings.Split(out, "\n") {
 		if w := lipgloss.Width(line); w > width {
 			t.Errorf("line is %d cells wide, want <= %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestListAgentLabelsDistinguishClaudeCodeAndCodex(t *testing.T) {
+	if got := listAgentLabel(models.AgentClaude); got != "C" {
+		t.Errorf("Claude Code sigil = %q, want C", got)
+	}
+	if got := listAgentLabel(models.AgentCodex); got != "X" {
+		t.Errorf("Codex sigil = %q, want X", got)
+	}
+
+	m := Model{}
+	m.filtered = []models.Session{
+		{Name: "repo/claude_01", SessionName: "repo", AgentType: models.AgentClaude},
+		{Name: "repo/codex_01", SessionName: "repo", AgentType: models.AgentCodex},
+	}
+
+	out, _ := m.renderListView(48, 10)
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > 48 {
+			t.Errorf("mixed-agent row is %d cells wide, want <= 48: %q", w, line)
 		}
 	}
 }

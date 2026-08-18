@@ -50,3 +50,36 @@ func (nagareFormTheme) Theme(isDark bool) *huh.Styles {
 }
 
 func formTheme() huh.Theme { return nagareFormTheme{} }
+
+// Frame sizing shared by the two forms.
+//
+// Both render a huh form inside a bordered box and place it centred. Two things
+// have to be told about the terminal for that to fit: huh, which otherwise lays
+// out at its own default width of about 98 cells, and the assembled frame, since
+// lipgloss.Place pads up to the given size but never truncates — so an oversized
+// box silently scrolled the alt screen. The other three TUIs in nagare already
+// clamp their frames; these two did not.
+
+// boxChromeWidth is the border (2) and horizontal padding (2*2) around the form.
+const boxChromeWidth = 6
+
+// boxChromeHeight is the border (2), vertical padding (2), the title and the
+// blank line under it.
+const boxChromeHeight = 6
+
+func formWidth(termWidth int) int {
+	return max(termWidth-boxChromeWidth, 20)
+}
+
+func formHeight(termHeight int) int {
+	return max(termHeight-boxChromeHeight, 6)
+}
+
+// clampFrame pins an assembled frame to the terminal, the same safety net the
+// picker, notification centre and popup all use.
+func clampFrame(content string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return content
+	}
+	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(content)
+}

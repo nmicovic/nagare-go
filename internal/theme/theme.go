@@ -287,6 +287,14 @@ func merge(dark, light Colors) Colors {
 	}
 }
 
+// Mix blends a toward b by t (0 = a, 1 = b), in Lab so the midpoint looks like a
+// midpoint. Exported because colour interpolation is how a terminal fades: there
+// is no opacity, so an animation that would dissolve in a GUI has to walk its
+// colour toward the background instead.
+func Mix(a, b color.Color, t float64) color.Color {
+	return mix(a, b, t)
+}
+
 // lift returns c with its HCL lightness moved by dl, clamped to the display
 // gamut. A negative dl sinks it.
 func lift(c color.Color, dl float64) color.Color {

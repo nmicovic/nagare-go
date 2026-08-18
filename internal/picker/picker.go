@@ -49,7 +49,6 @@ type PreviewUpdatedMsg string
 
 type tickScanMsg struct{}
 type tickPreviewMsg struct{}
-type tickPulseMsg struct{}
 type gridPreviewsMsg map[string]string
 
 // Picker exit actions.
@@ -106,8 +105,14 @@ type Model struct {
 	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
 	animEnabled   bool     // spring-animated overlay entry (config: picker.animations)
 	overlayAnim   overlayAnim
-	pulseOn       bool // 1Hz toggle used to breathe the status dot on running/waiting sessions
-	testNoScan    bool // test hook: disable the live tmux scanner (see export_test.go)
+	breath        float64                         // phase of the status-dot breath, 0..1
+	breathOn      bool                            // whether the breath clock is currently ticking
+	slide         selectionSlide                  // highlight crossfading between rows
+	arrived       string                          // worktree whose pane just appeared, to flash once it is listed
+	history       map[string][]uint8              // recent activity levels per session, for sparklines
+	flashes       map[string]flashState           // rows fading after a state change
+	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
+	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
 }
 
 // New creates a new picker model with default settings.
@@ -136,6 +141,9 @@ func New() Model {
 		registry:     state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput:  pi,
 		workCache:    make(map[string]git.Work),
+		flashes:      make(map[string]flashState),
+		history:      make(map[string][]uint8),
+		prevStatus:   make(map[string]models.SessionStatus),
 		spinner:      newSpinner(),
 	}
 }
@@ -298,16 +306,8 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		doScan(m.statesDir),
 		doPreviewTick(),
-		doPulseTick(),
+		doBreathTick(),
 	)
-}
-
-// doPulseTick fires once per second. The handler flips a bool that the
-// status-dot renderer consults to alternate Faint on running/waiting
-// sessions — a low-amplitude "breathing" pulse that reads as active work
-// without the noise of a spinning cursor.
-func doPulseTick() tea.Cmd {
-	return tea.Tick(1*time.Second, func(time.Time) tea.Msg { return tickPulseMsg{} })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -322,8 +322,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.statusErr = ""
+		prev := m.cursor
 		m.cursor = msg.index
-		return m, m.doPreview()
+		cmds := []tea.Cmd{m.doPreview()}
+		if m.startSlide(prev, len(m.filtered)) {
+			cmds = append(cmds, doAnimTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case mouseActivateMsg:
 		if msg.index < 0 || msg.index >= len(m.filtered) {
@@ -352,8 +357,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.viewMode == GridView {
 			step *= gridColumns(len(m.filtered))
 		}
+		prev := m.cursor
 		m.cursor = min(max(m.cursor+step, 0), len(m.filtered)-1)
-		return m, m.doPreview()
+		cmds := []tea.Cmd{m.doPreview()}
+		if m.startSlide(prev, len(m.filtered)) {
+			cmds = append(cmds, doAnimTick())
+		}
+		return m, tea.Batch(cmds...)
 
 	case spinner.TickMsg:
 		if m.pending == nil {
@@ -385,16 +395,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = []models.Session(msg)
 		if m.pending != nil && m.pending.satisfiedBy(m.sessions) {
 			log.Info("worktree %q is live", m.pending.name)
+			// Hand the eye off from the spinner to the row that just appeared. The
+			// spinner sits above the list and the new pane arrives somewhere inside
+			// it, sorted among everything else, so without this the wait ends by the
+			// spinner simply vanishing and leaving the user to find what it made.
+			m.arrived = m.pending.name
 			m.pending = nil
 		}
 		m.workCache = make(map[string]git.Work) // recompute work against the new scan
+		// Spot the transitions worth announcing before the new statuses overwrite
+		// the old ones.
+		for key, f := range detectFlashes(m.prevStatus, m.sessions) {
+			m.flashes[key] = f
+		}
+		m.prevStatus = statusesOf(m.sessions)
+		recordActivity(m.history, m.sessions)
+		// A worktree that has just come up flashes like any other arrival worth
+		// noticing, reusing the same fade rather than inventing a second one.
+		if m.arrived != "" {
+			for _, sess := range m.sessions {
+				if sess.Details.Worktree == m.arrived {
+					m.flashes[sessionKey(sess)] = flashState{kind: flashDone, level: 1}
+					m.arrived = ""
+					break
+				}
+			}
+		}
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
 		if m.testNoScan {
 			return m, nil
 		}
-		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
+		next := tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
+		// The clock stops itself when nothing is moving, so a scan that turns up
+		// activity — or starts a flash — has to start it again.
+		if !m.breathOn && (needsBreathing(m.filtered) || len(m.flashes) > 0) {
+			m.breathOn = true
+			return m, tea.Batch(next, doBreathTick())
+		}
+		return m, next
 
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
@@ -410,33 +450,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickPreviewMsg:
 		return m, m.doPreview()
 
-	case tickPulseMsg:
-		m.pulseOn = !m.pulseOn
-		return m, doPulseTick()
+	case tickBreathMsg:
+		// One clock drives both the breath and any fading rows. It stops when
+		// neither has anything to do, so a settled list costs nothing at all, and
+		// the scan handler restarts it as soon as something turns up.
+		fading := stepFlashes(m.flashes)
+		breathing := needsBreathing(m.filtered)
+		if !breathing && !fading {
+			m.breath, m.breathOn = 0, false
+			return m, nil
+		}
+		m.breathOn = true
+		if breathing {
+			m.breath = breathStep(m.breath)
+		}
+		return m, doBreathTick()
 
 	case tickAnimMsg:
-		if !m.overlayAnim.step() {
+		// One transient clock for both; it stops when neither has anything left.
+		moving := m.overlayAnim.step()
+		if m.slide.step() {
+			moving = true
+		}
+		if !moving {
 			return m, nil
 		}
 		return m, doAnimTick()
 
 	case tea.KeyMsg:
 		wasOpen := m.overlayOpen()
+		prevCursor, prevLen := m.cursor, len(m.filtered)
+
 		next, cmd := m.handleKey(msg)
 		updated, ok := next.(Model)
 		if !ok {
 			return next, cmd
 		}
-		// Catching the transition here, rather than at each of the four places an
-		// overlay opens, means a fifth one cannot forget to animate.
+
+		cmds := []tea.Cmd{cmd}
+		// Catching these transitions here, rather than at each of the places that
+		// cause them, means a new overlay or a new navigation key cannot forget to
+		// animate.
 		if updated.animEnabled && !wasOpen && updated.overlayOpen() {
 			updated.overlayAnim.start()
-			return updated, tea.Batch(cmd, doAnimTick())
+			cmds = append(cmds, doAnimTick())
 		}
 		if !updated.overlayOpen() {
 			updated.overlayAnim.stop()
 		}
-		return updated, cmd
+		if updated.startSlide(prevCursor, prevLen) {
+			cmds = append(cmds, doAnimTick())
+		}
+		return updated, tea.Batch(cmds...)
 
 	case editorDoneMsg:
 		defer os.Remove(msg.path)
@@ -472,12 +537,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() tea.View {
 	content, hits := m.view()
-	// Last line of defense. Every panel is already pinned with fitBox, but a
-	// frame even one row too tall scrolls the alt screen and smears the whole
-	// UI, so clamp the assembled frame rather than trusting the arithmetic.
-	if m.width > 0 && m.height > 0 {
-		content = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content)
-	}
+	content = clampHeight(content, m.height)
 	v := tea.NewView(content)
 	v.AltScreen = true
 
@@ -500,6 +560,30 @@ func (m Model) View() tea.View {
 		}
 	}
 	return v
+}
+
+// clampHeight drops any rows past the terminal's last line. A frame even one row
+// too tall scrolls the alt screen and smears the whole UI.
+//
+// The width half of this guard used to live here too, as a MaxWidth Render over
+// the assembled frame — and it cost 18% of every frame, because Render measures
+// each line with full grapheme segmentation. It is not needed: every panel is
+// pinned by fitBox, grid rows and the help bar are rendered at an explicit width,
+// and placeOverlay clamps itself, so the invariant is established where content is
+// built rather than patched up at the end. TestFrameIsExactlyTerminalSized asserts
+// it across view modes, session counts and terminal sizes.
+//
+// Height stays because it is nearly free: dropping trailing lines needs no
+// measurement at all.
+func clampHeight(content string, height int) string {
+	if height <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= height {
+		return content
+	}
+	return strings.Join(lines[:height], "\n")
 }
 
 func (m Model) view() (string, hitTargets) {
@@ -793,10 +877,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		log.Info("sort mode: %d", m.sortMode)
 		return m, nil
 	case keyRename:
-		if s, ok := m.selectedSession(); ok {
+		if s, ok := m.selectedSession(); ok && s.Status != models.StatusSaved {
 			m.renameMode = true
 			m.renameSession = s
-			m.searchInput.SetValue(s.Name)
+			// The project already lives in the group header. Edit only the task
+			// name shown on the child row, never the technical "repo/window" ID.
+			m.searchInput.SetValue(childLabel(s))
 			m.searchInput.CursorEnd()
 		}
 		return m, nil
@@ -911,47 +997,16 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.renameMode = false
 		m.searchInput.SetValue("")
 
-		if newName == "" || newName == m.renameSession.Name {
+		if newName == "" || newName == childLabel(m.renameSession) {
 			return m, nil
 		}
 
-		oldName := m.renameSession.SessionName
-
-		// Check if name already exists
-		existing := tmux.RunTmux("list-sessions", "-F", "#{session_name}")
-		for _, line := range strings.Split(existing, "\n") {
-			if strings.TrimSpace(line) == newName {
-				log.Info("rename failed: %s already exists", newName)
-				return m, nil
-			}
-		}
-
-		// Count agents in the same tmux session (multi-agent check)
-		count := 0
-		for _, s := range m.sessions {
-			if s.SessionName == oldName {
-				count++
-			}
-		}
-
-		if count > 1 {
-			// Rename just the window
-			target := fmt.Sprintf("%s:%d", oldName, m.renameSession.WindowIndex)
-			tmux.RunTmux("rename-window", "-t", target, newName)
-			log.Info("renamed window %s -> %s", target, newName)
-		} else {
-			// Rename the tmux session
-			tmux.RunTmux("rename-session", "-t", oldName, newName)
-			log.Info("renamed session %s -> %s", oldName, newName)
-
-			// Update registry
-			if existing := m.registry.Find(oldName); existing != nil {
-				path := existing.Path
-				agent := existing.Agent
-				m.registry.Remove(oldName)
-				m.registry.Register(newName, path, agent)
-			}
-		}
+		// A task name belongs to the selected agent window, not to the enclosing
+		// tmux session. Keeping the latter stable preserves the repository header,
+		// MCP target, saved-session identity, and sibling windows.
+		target := fmt.Sprintf("%s:%d", m.renameSession.SessionName, m.renameSession.WindowIndex)
+		tmux.RunTmux("rename-window", "-t", target, newName)
+		log.Info("named task %s -> %s", target, newName)
 
 		return m, doScan(m.statesDir)
 	default:
@@ -1368,7 +1423,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 
 	// Search input (always active)
 	if m.renameMode {
-		m.searchInput.Prompt = " Rename: "
+		m.searchInput.Prompt = " Name task: "
 	} else if m.worktreeMode {
 		m.searchInput.Prompt = " New worktree: "
 	} else {
@@ -1457,6 +1512,10 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 	var lines []string
 	for ri := start; ri < end; ri++ {
 		row := rows[ri]
+		if row.SessionIdx == spacerRow {
+			lines = append(lines, strings.Repeat(" ", width))
+			continue
+		}
 		if row.SessionIdx < 0 {
 			lines = append(lines, m.renderGroupHeader(row, width))
 			continue
@@ -1465,38 +1524,62 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 
 		i := row.SessionIdx
 		s := m.filtered[i]
-		dot := statusDot(s.Status, m.pulseOn)
+		// Selection: tint the row background (crush / lazygit / gh-dash
+		// convention) — no caret or gutter rune. The tint colour is per-theme
+		// (SelBg), so every theme controls exactly how loud its selection reads.
+		//
+		// Every segment below carries this background itself. That is not a style
+		// choice: each segment's own styling ends with a full SGR reset, so a
+		// background applied around the finished row would survive only as far as
+		// the first reset. Applying it per segment used to be done by wrapping
+		// each one in a second Render, which both cost nine extra Render calls a
+		// row and still left a gap — the name and branch were rendered without it,
+		// so the selection tint broke either side of the name.
+		// The selection tint crossfades between the row the cursor left and the one
+		// it arrived at, so the highlight reads as travelling rather than jumping.
+		// Outside a slide this is the plain full-or-nothing it has always been.
+		rowBg := c.Surface
+		if t := m.slide.tintFor(i, m.cursor); t > 0 {
+			rowBg = theme.Mix(c.Surface, c.SelBg, t)
+		}
+		// A row that just changed state fades back from a tint, so a glance catches
+		// what happened even after the status dot has settled.
+		rowBg = flashTint(rowBg, m.flashes[sessionKey(s)], flashRowDepth)
+		bg := lipgloss.NewStyle().Background(rowBg)
+
+		dot := statusDotOn(s.Status, m.breath, rowBg)
 
 		star := ""
 		if m.isStarred(s.Name) {
 			star = "★ "
 		}
-		starStyled := lipgloss.NewStyle().Foreground(c.Warning).Render(star)
+		starStyled := bg.Foreground(c.Warning).Render(star)
 
-		// Row layout: a left cluster (status dot + name) and a right cluster
-		// (star + agent badge) pinned to the right edge. Right-aligning the
-		// badges lines them up in a clean gutter instead of letting them
-		// float at ragged offsets that vary with each name's length — and it
-		// hands every spare column to the name. The star sits inside the
-		// cluster ahead of the badge so a starred row does not shunt its
-		// badge out of the shared column.
+		// Row layout starts with status, tree prefix, and an explicit agent
+		// badge. Keeping the badge next to the name makes mixed Claude Code and
+		// Codex sessions distinguishable at a glance; their generated pane names
+		// are too similar to carry that responsibility by themselves.
 		// A grouped child is indented under its header and shows only its own
 		// name — the repo is on the header, so the prefix is not repeated.
 		prefix := ""
 		if row.Glyph != "" {
 			prefix = row.Glyph + " "
 		}
+		agent := listAgentLabel(s.AgentType) + " "
+		agentStyled := bg.
+			Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
+			Bold(true).
+			Render(agent)
 
-		// The branch takes the right-hand column. The agent badge used to live
-		// there, but with every pane usually running the same agent the branch
-		// is the more informative use of those columns; the agent is still
-		// named in the detail pane and in grid view.
+		// The branch keeps the right-hand column; the compact agent badge is part
+		// of the left cluster so both remain visible on ordinary pane widths.
 		branch := branchFor(row.Label, s.Details.Worktree, s.Details.GitBranch)
 
 		// Columns the row spends on anything that is not text: leading space,
-		// the dot, the space after it, the tree prefix, the star, and the
+		// the dot, the space after it, the tree prefix, agent badge, star, and the
 		// trailing gutter.
-		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) + lipgloss.Width(star) + rowGutter
+		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) +
+			lipgloss.Width(agentStyled) + lipgloss.Width(star) + rowGutter
 		avail := width - fixed
 		if avail < minNameWidth {
 			avail = minNameWidth
@@ -1508,45 +1591,56 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		} else {
 			branch = ""
 		}
-		branchStyled := mutedStyle().Render(branch)
+		branchStyled := bg.Foreground(c.Muted).Render(branch)
 
-		// Selection: tint the row background (crush / lazygit / gh-dash
-		// convention) — no caret or gutter rune. Bold the text for an
-		// extra hierarchy cue. The tint color is per-theme (SelBg), so
-		// every theme controls exactly how loud its selection reads.
-		rowBg := c.Surface
-		nameStyle := lipgloss.NewStyle().Foreground(c.Foreground)
+		// Bold the selected row's name for an extra hierarchy cue beyond the tint.
+		nameStyle := bg.Foreground(c.Foreground)
 		if i == m.cursor {
-			rowBg = c.SelBg
-			nameStyle = nameStyle.Foreground(c.Foreground).Bold(true)
+			nameStyle = nameStyle.Bold(true)
 		}
 		// Highlight matches against the label actually shown: a query that only
 		// hit the repo portion has nothing to mark on the child, and the header
 		// above carries that text.
 		nameStyled := renderNameWithMatches(name, row.Label, m.query(), nameStyle, c.Accent)
-		prefixStyled := mutedStyle().Render(prefix)
+		prefixStyled := bg.Foreground(c.Muted).Render(prefix)
 
 		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) -
-			lipgloss.Width(nameStyled) - lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
+			lipgloss.Width(agentStyled) - lipgloss.Width(nameStyled) -
+			lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
 		if gap < 1 {
 			gap = 1
 		}
 
-		// Each segment carries the row background itself. Wrapping the finished
-		// string in one background style does not work: every inner style ends
-		// with a full reset, which clears the background for everything after
-		// it — leaving the tint on only the first and last column.
-		bg := lipgloss.NewStyle().Background(rowBg)
-		var content strings.Builder
-		for _, part := range []string{
-			" ", dot, " ", prefixStyled, nameStyled,
-			strings.Repeat(" ", gap), starStyled, branchStyled, strings.Repeat(" ", rowGutter),
-		} {
-			content.WriteString(bg.Render(part))
-		}
-		lines = append(lines, bg.Width(width).Render(content.String()))
+		// Every segment already carries rowBg, so the row is assembled by plain
+		// concatenation and padded once. onPlane re-establishes the tint after the
+		// resets the segments leave behind.
+		line := " " + dot + " " + prefixStyled + agentStyled + nameStyled +
+			strings.Repeat(" ", gap) + starStyled + branchStyled +
+			strings.Repeat(" ", rowGutter)
+		lines = append(lines, bg.Width(width).Render(onPlane(line, rowBg)))
 	}
 	return strings.Join(lines, "\n"), rowAt
+}
+
+// listAgentLabel is a one-cell sigil: color carries most of the identity, while
+// the letter keeps it readable without color and leaves room for names/branches.
+func listAgentLabel(agent models.AgentType) string {
+	switch agent {
+	case models.AgentClaude:
+		return "C"
+	case models.AgentCodex:
+		return "X"
+	case models.AgentOpenCode:
+		return "O"
+	case models.AgentGemini:
+		return "G"
+	case models.AgentCrush:
+		return "♥"
+	case models.AgentPi:
+		return "π"
+	default:
+		return "?"
+	}
 }
 
 // renderGroupHeader renders the repo line above a group of sessions. It carries
@@ -1555,7 +1649,11 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 func (m Model) renderGroupHeader(row listRow, width int) string {
 	c := theme.Current().Colors
 
-	count := mutedStyle().Render(fmt.Sprintf("%d sessions", row.Count))
+	noun := "sessions"
+	if row.Count == 1 {
+		noun = "session"
+	}
+	count := mutedStyle().Render(fmt.Sprintf("%d %s", row.Count, noun))
 	fixed := 1 + 1 + lipgloss.Width(count) + rowGutter
 	maxName := width - fixed
 	if maxName < minNameWidth {
@@ -1643,6 +1741,16 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if s.Details.LastActivity != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Active"), subtleStyle().Render(formatTimeAgo(s.Details.LastActivity))))
 	}
+	// Recent activity, as a braille trace: what this agent has been doing, which
+	// the status dot cannot say. Only worth drawing once there is more than a
+	// single sample to compare against.
+	if hist := m.history[sessionKey(s)]; len(hist) > 1 {
+		w := sparkWidth(innerWidth - 20)
+		if w > 0 {
+			info.WriteString(fmt.Sprintf("  %s  %s  %s\n", label.Render("Recent"),
+				sparklineOn(hist, w, c.Surface), sparkLegend()))
+		}
+	}
 	if s.LastMessage != "" {
 		msg := s.LastMessage
 		maxLen := innerWidth - 30
@@ -1676,8 +1784,16 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	// Size detail panel to fit its content exactly. lipgloss v2 Height is the
 	// total rendered height, so it must cover the content plus this style's
 	// vertical padding (2) and border (2).
-	detailContent := detail.String()
-	detailLines := strings.Count(detailContent, "\n") + 1
+	//
+	// Wrap the content to the panel width *before* measuring it. Counting "\n"
+	// in the unwrapped string counts string lines, not rendered rows, and a path
+	// too long for a narrow panel occupies two rows while counting as one — which
+	// left the panel a row short and let fitBox clip its bottom border away. The
+	// wide branch above happened to be immune only because JoinHorizontal renders
+	// the info block at a fixed width first, so its wraps were already real
+	// newlines by the time they were counted.
+	detailContent := lipgloss.NewStyle().Width(innerWidth).Render(detail.String())
+	detailLines := lipgloss.Height(detailContent)
 	detailOuter := detailLines + 4
 	if detailOuter > outerHeight/2 {
 		// Cap at half the panel and clamp content to fit.
@@ -1806,8 +1922,19 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				innerWidth = 10
 			}
 
+			// The agent art sits to the right of the header block, so the header's
+			// real budget is the text column beside it — not the full card width.
+			// Sizing the header against innerWidth and then rendering it into the
+			// narrower column is what made it wrap.
+			art := renderAgentArtSmall(s.AgentType)
+			artWidth := lipgloss.Width(art)
+			textWidth := innerWidth
+			if art != "" && innerWidth > 30 {
+				textWidth = innerWidth - artWidth - 1
+			}
+
 			// Header: status dot + name + agent badge
-			dot := statusDot(s.Status, m.pulseOn)
+			dot := statusDotOn(s.Status, m.breath, c.Surface)
 			statusLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(s.Status))).Render(models.StatusLabel(s.Status))
 			agentBadge := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
@@ -1819,11 +1946,38 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			// badge and status leave, exactly as list rows do. Letting it wrap made
 			// a narrow card taller than its cell, and a name broken across two rows
 			// is unreadable anyway.
+			// An activity trace pinned to the right of the header. Grid view is where
+			// it earns the most: a wall of cards is exactly the situation where
+			// knowing which agent has been busy matters, and the status dot alone
+			// cannot say.
 			// 5 = leading space, two separating spaces, and the double space
 			// before the status label.
-			fixed := lipgloss.Width(dot) + lipgloss.Width(agentBadge) + lipgloss.Width(statusLabel) + 5
+			chrome := lipgloss.Width(dot) + lipgloss.Width(agentBadge) +
+				lipgloss.Width(statusLabel) + 5
+
+			// The trace yields to the name. A card narrow enough that both cannot fit
+			// gets no trace: forcing one in left the name at its minimum and the
+			// header still over budget, which wrapped it and cost the card a row.
+			spark := ""
+			const sparkGap = 2
+			if hist := m.history[sessionKey(s)]; len(hist) > 1 {
+				room := textWidth - chrome - minNameWidth - sparkGap
+				if w := sparkWidth(min(room, textWidth/4)); w > 0 {
+					spark = sparklineOn(hist, w, c.Surface)
+				}
+			}
+			sparkRoom := 0
+			if spark != "" {
+				sparkRoom = lipgloss.Width(spark) + sparkGap
+			}
+
 			header := fmt.Sprintf(" %s %s %s  %s", dot,
-				truncate(s.Name, max(innerWidth-fixed, minNameWidth)), agentBadge, statusLabel)
+				truncate(s.Name, max(textWidth-chrome-sparkRoom, minNameWidth)),
+				agentBadge, statusLabel)
+			if spark != "" {
+				pad := max(textWidth-lipgloss.Width(header)-lipgloss.Width(spark), 1)
+				header += strings.Repeat(" ", pad) + spark
+			}
 
 			// Meta line: path + git branch. Allowed to wrap — seeing the whole path
 			// is worth a row — with the card's preview budget derived from however
@@ -1833,12 +1987,8 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 				meta += mutedStyle().Render(fmt.Sprintf("  (%s)", s.Details.GitBranch))
 			}
 
-			// Small agent art floated to the right of the header
-			art := renderAgentArtSmall(s.AgentType)
-			artWidth := lipgloss.Width(art)
 			topBlock := header + "\n" + meta
 			if art != "" && innerWidth > 30 {
-				textWidth := innerWidth - artWidth - 1
 				textCol := lipgloss.NewStyle().Width(textWidth).Background(c.Surface).Render(topBlock)
 				gap := lipgloss.NewStyle().Width(1).Background(c.Surface).Render("")
 				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, textCol, gap, art)
@@ -1881,6 +2031,14 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			// The selected card takes the same gradient sweep as the focused
 			// panel in list view, so "this is where you are" looks identical in
 			// both modes. Unselected cards stay on quiet chrome.
+			//
+			// Nothing about a card animates. A trail on the card being left behind
+			// and a flash on a card whose agent changed state were both tried and
+			// both rejected: a card is a large object, and moving or lighting one
+			// pulls the eye to the card rather than to what is written on it. The
+			// status dot inside it still breathes, and in list view the row tint
+			// still crossfades and flashes — a row is a thin enough thing that motion
+			// reads as a hint rather than as an event.
 			cellStyle := lipgloss.NewStyle().
 				Background(c.Surface).
 				Foreground(c.Foreground).

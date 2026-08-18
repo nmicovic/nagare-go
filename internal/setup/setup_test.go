@@ -257,3 +257,102 @@ func TestRegisterMCPLocalOpenCodePath(t *testing.T) {
 		t.Errorf("enabled = %v, want true", entry["enabled"])
 	}
 }
+
+func TestInstallCodexHooksPreservesExisting(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	existing := map[string]interface{}{
+		"description": "my hooks",
+		"hooks": map[string]interface{}{
+			"Stop": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{
+					"type": "command", "command": "my-custom-hook",
+				}},
+			}},
+		},
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(filepath.Join(dir, "hooks.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		if err := installCodexHooks(home, "/opt/bin/nagare-go"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := loadJSON(filepath.Join(dir, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["description"] != "my hooks" {
+		t.Error("top-level Codex hook metadata was not preserved")
+	}
+	hooks := result["hooks"].(map[string]interface{})
+	for _, event := range codexHookEvents {
+		if entries, ok := hooks[event].([]interface{}); !ok || len(entries) == 0 {
+			t.Errorf("Codex event %q missing", event)
+		}
+	}
+	if got := len(hooks["Stop"].([]interface{})); got != 2 {
+		t.Errorf("Stop hooks = %d, want custom + Nagare", got)
+	}
+}
+
+func TestRegisterMCPCodexPreservesConfigAndReplacesEntry(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	existing := `# keep this comment
+model = "test-model"
+
+[mcp_servers.other]
+command = "other-mcp"
+
+[mcp_servers.nagare]
+command = "/old/nagare-go"
+args = ["mcp"]
+`
+	if err := os.WriteFile(path, []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := registerMCPCodex(path, "/opt/bin/nagare-go"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{"# keep this comment", `model = "test-model"`, "[mcp_servers.other]", `command = "/opt/bin/nagare-go"`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Codex config missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "/old/nagare-go") {
+		t.Error("stale Nagare MCP entry survived")
+	}
+}
+
+func TestInstallCodexSkill(t *testing.T) {
+	home := t.TempDir()
+	installCodexSkill(home)
+	data, err := os.ReadFile(filepath.Join(home, ".codex", "skills", "nagare", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "name: nagare") {
+		t.Error("Codex skill frontmatter missing")
+	}
+	for _, tool := range mcp.ToolNames() {
+		if !strings.Contains(content, tool+"(") {
+			t.Errorf("Codex skill does not mention %q", tool)
+		}
+	}
+}

@@ -33,7 +33,7 @@ nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi
 
 Single binary with cobra subcommands. All code in `internal/` packages.
 
-- `internal/models` — Session, SessionStatus, AgentType (claude, opencode, gemini, crush, pi)
+- `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
 - `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
 - `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
@@ -97,9 +97,9 @@ share one directory. Work is cached per path and refreshed per scan: the pane
 re-renders every frame for the status-dot pulse, so git must never be called from
 render.
 
-List rows show the git branch in the right-hand column, where the agent badge used to
-sit: with every pane usually running the same agent the branch is the more informative
-use of those columns, and the agent is still named in the detail pane and grid view.
+List rows show a colored one-cell agent sigil (`C` for Claude Code, `X` for Codex,
+etc.) beside the name and the git branch in the right-hand column. Keeping both visible
+matters when one tmux session mixes agents whose generated pane names look similar.
 `branchFor` suppresses a branch that only repeats the row — Claude names a worktree's
 branch `worktree-<name>` — checking the worktree name as well as the label, since a lone
 pane in a worktree is labelled with its full `{session}/{worktree}` name.
@@ -108,8 +108,9 @@ branch below `minBranchWidth`.
 
 In the list view, sessions sharing a tmux session name are grouped under a single
 header row naming the repo, and children show only their own name — so the repo
-prefix is not repeated on every row. Grouping starts at two members; a lone session
-renders as a plain row. A group takes the position of its most urgent member, so a
+prefix is not repeated on every row. Lone sessions also get a header and one indented
+agent child, keeping the tree and agent sigils aligned across the list. One blank row
+separates project blocks. A group takes the position of its most urgent member, so a
 waiting worktree lifts its whole repo. Rows are derived per frame by
 `picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
 
@@ -124,6 +125,7 @@ per-agent elsewhere.
 | Agent | Status reporting | Messaging tools |
 |-------|------------------|-----------------|
 | Claude Code | hooks in `~/.claude/settings.json` | MCP (`~/.claude.json`) |
+| Codex | hooks in `~/.codex/hooks.json` | MCP (`~/.codex/config.toml`) |
 | Gemini CLI | hooks in `~/.gemini/settings.json` | MCP (`~/.gemini/settings.json`) |
 | OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
@@ -136,6 +138,9 @@ server calls. pi also has no permission prompts, so pi sessions never reach
 
 Generated plugin/extension files are rewritten on every `nagare-go setup`, so edits
 belong in `internal/setup`, not in the installed files.
+
+Codex requires newly installed command hooks to be reviewed once with `/hooks`.
+Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 
 ## Picker Keybindings
 
@@ -152,7 +157,7 @@ belong in `internal/setup`, not in the installed files.
 | Ctrl+o | Cycle sort mode |
 | Ctrl+w | Unload agent pane |
 | Ctrl+x | Kill the pane's window (or the session if it is the only agent pane); offers to remove a worktree |
-| F2 | Rename session |
+| F2 | Name the selected task |
 | F3 | New git worktree for this repo |
 | Ctrl+n | New session form |
 | Ctrl+r | Quick prototype |
@@ -180,6 +185,74 @@ The footer shows only the keys valid for the current mode and selection, trimmed
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
 
+### Layout: measure, never assume
+
+Every layout bug found so far has been the same bug — a rendered height or width
+derived by arithmetic or by counting string lines, instead of measured with
+`lipgloss.Height` / `lipgloss.Width` after wrapping. It is worth stating as a rule
+because the failures are invisible: each of the four TUIs clamps its assembled
+frame as a safety net, so an over-budget layout does not smear the screen, it
+silently loses its bottom row — which is where hint bars and panel borders live.
+
+Two habits follow from it:
+
+1. **Wrap, then measure.** `lipgloss.Height(style.Width(w).Render(s))`, not
+   `strings.Count(s, "\n") + 1`. A single string line occupies several rows once
+   it is too long for its panel.
+2. **Window by rows, not by items.** A list entry may be two rows, or three when
+   it wraps. Treating a row budget as an item count over-renders by whatever the
+   average entry height is.
+
+Found and fixed by an audit of all four TUIs:
+
+| Where | Assumed | Symptom |
+|---|---|---|
+| `picker` list header | header is 4 rows | stats line wraps; last rows pushed through the bottom border |
+| `picker` help overlay | box is `height*2/3` | ~44 rows of content silently clipped; also pinned the entry animation to y=0 |
+| `picker` grid card | header is 2 rows | card one row too tall; **bottom border clipped off** |
+| `picker` grid rows | clamp height, keep row count | grid taller than the frame; lower cards cut off |
+| `picker` grid card width | `Padding(1)` is 4 cells | separator two cells short |
+| `picker` detail panel | `strings.Count("\n")` | narrow panel loses its bottom border |
+| `popup` | `height - 7`, `width - 4` | hint bar clipped below ~70 cols; separators short |
+| `popup` hint bar | padding floored at 1 | bar wider than the popup, wrapped, then clipped |
+| `notifs` list | row budget as item count | 92 rows into a 50-row frame; hint bar never visible |
+| `notifs` settings | `height` ignored entirely | overflowed any terminal under ~19 rows |
+| `notifs` hint bar | trimmed from the end | dropped "Esc Quit", leaving no visible way out |
+| `newsession`, `quickproto` | no frame clamp at all | huh lays out at ~98 cells; every row wrapped on narrower terminals |
+
+A hint bar's exit key is reserved space and never trimmed — the picker footer keeps
+`F1 More · Esc Quit`, the notification centre keeps `Esc Quit`. Trimming from the
+end takes the way out with it.
+
+Layout tests assert on the **unclamped** frame (`m.view()`, not `m.View()`), since
+the clamp is what hides the overflow. `internal/popup/layout_test.go`,
+`internal/notifs/layout_test.go` and the box-integrity tests in
+`internal/picker/grid_test.go` all check exact frame size across a spread of
+terminal sizes, plus that hint bars survive and boxes are closed.
+
+### Activity sparklines
+
+The picker showed what every agent was doing *now* and nothing about what it had
+been doing — and those are different questions. An agent grinding for ten minutes
+and one that woke up four seconds ago are identical in a list of status dots, and
+which is which changes what you do about it.
+
+Each scan appends one sample per session to `Model.history`, so the trace costs
+nothing beyond the polling already happening. `internal/picker/spark.go` renders it
+as braille: a cell is 2x4 dots, so two samples wide and four levels tall per
+character. Nothing else in Unicode is that dense, and unlike the image protocols it
+needs no capability negotiation and no tmux passthrough — it is just text.
+
+Status maps to bar height with waiting *above* running, so the tallest bars are the
+moments the user was needed, and each cell takes the louder of its two samples: one
+moment of waiting inside a long run of work is the thing worth seeing, not something
+to average away. Colour repeats the status colours, so the trace reads without a
+legend. Shown in the detail pane as a `Recent` row and pinned right of each grid
+card's header.
+
+History is trimmed to `sparkSamples` and sessions that disappear are pruned, since
+the picker runs for hours.
+
 ### Grid cards
 
 Card height arithmetic must be *measured*, never assumed. Three bugs came from
@@ -196,6 +269,12 @@ assuming it:
 - `innerWidth = cellWidth - 6` over-subtracted: `Padding(1)` is one cell per side,
   so two, not four. The separator fell two cells short of its card.
 
+A card's header is budgeted against the **text column** beside the agent art, not
+the full card width. Sizing it against the card and then rendering it into the
+narrower column is what wrapped the header — a latent bug that only surfaced once
+the sparkline made the header wide enough to hit it. `gridModel` in the tests seeds
+activity history for exactly that reason, so the 50-case card test covers the path.
+
 The header is kept to one row by truncating the name, as list rows do; the meta
 line may wrap and the preview budget is derived from its measured height. If even
 one row of preview will not fit, the header block is clamped by *rendered rows* —
@@ -207,11 +286,65 @@ covers the arithmetic feeding through to the whole frame.
 
 ### Animation
 
-Overlays rise into place on a harmonica spring (`internal/picker/anim.go`), ~233ms
-over 8 frames at 30fps. Off with `picker.animations = false`. The spring stops as
-soon as its offset *rounds* to zero — a terminal has no sub-cell vertical
-positioning, so stepping past that point re-renders identical frames; the first
-tuning wasted 6 such frames out of 18.
+Four animations, on two clocks — one transient at 30fps for motion, one slow at
+10fps for anything continuous.
+
+**Overlay entry** rises into place on a harmonica spring (`internal/picker/anim.go`),
+~233ms over 8 frames at 30fps, transient. Off with `picker.animations = false`. The
+spring stops as soon as its offset *rounds* to zero — a terminal has no sub-cell
+vertical positioning, so stepping past that point re-renders identical frames; the
+first tuning wasted 6 such frames out of 18.
+
+**Status-dot breath** (`breathStep`/`breathFactor`) walks a running or waiting dot's
+colour toward the surface behind it and back, over 2.2s at 10fps on a cosine-eased
+curve. It replaced a `Faint` toggle flipping once a second, which read as a blink:
+two states, and an instant transition between them.
+
+**Row flash** (`internal/picker/flash.go`) tints a row for 900ms when a session
+starts waiting (toward Warning) or finishes working (toward Success), fading on a
+front-loaded curve so it arrives bright and lets go gently. It fires on exactly the
+two transitions the notification layer fires on, and never on first sight of a
+session — otherwise every waiting agent flashes the moment the picker opens. Grid
+cards flash their *border* rather than their fill: a card is large enough that
+tinting all of it would shout, and its border already carries focus.
+
+**Selection slide** (`selectionSlide` in `anim.go`) crossfades the row tint between
+the row the cursor left and the one it arrived at — 130ms, four frames on the
+transient clock, the two tints always summing to a whole so the highlight neither
+dims nor doubles mid-move. It is the only animation that fires on ordinary use, and
+that is the point: an overlay spring is invisible to anyone who never opens an
+overlay. It is skipped when the list length changed (a refilter renumbers rows, so
+the previous index no longer refers to the same session), in grid view (selection
+there is a card border, which does not crossfade legibly), and while an overlay has
+the screen.
+
+**Nothing about a grid card animates.** Three attempts were made and all three were
+rejected on looks: a staggered arrival when the grid is first shown, a dimming border
+trail on the card being left behind, and a border flash when a card's agent changed
+state. A card is a large object, and moving or lighting one pulls the eye to the card
+rather than to what is written on it — a row is thin enough that motion reads as a
+hint, a card is not. Do not re-add any of them.
+
+The status dot inside a card still breathes; that is the only moving part in grid
+view. `TestGridCardsDoNotAnimate` holds the breath phase still and asserts the frame
+is byte-identical over three seconds of animation ticks, with a slide and flashes
+forced on. It starts the slide directly rather than through a key press, because
+`startSlide` refuses in grid view and going through it left the render side untested
+— the first version of the test passed with a card trail re-added.
+
+**Colour is the only thing a terminal can fade.** There is no opacity, so an effect
+that would dissolve in a GUI has to walk its colour toward the background instead —
+which is why `theme.Mix` is exported and why both the breath and the flash are
+colour interpolations rather than character or position tricks.
+
+**Slow animation is cheap; fast animation is not.** A 2.2s breath needs nothing like
+30 samples to look continuous, because the colour moves so little between frames. At
+10fps a 30-session frame is ~3% of a core, so the breath and the flash share one
+10fps clock — and it stops itself entirely when no session is breathing and no row
+is fading, so a settled list costs nothing. The scan handler restarts it, since a
+clock that stops has to be woken by whatever makes it relevant again. That balance
+is the whole reason the earlier "no always-on animation" conclusion was wrong: the
+constraint was never the frame cost alone, it was frame cost times sample rate.
 
 The animation clock only runs while something is moving, and that is not
 negotiable: a frame costs **1.8–5.4 ms** to assemble (measured — 1.8ms at 8
@@ -221,11 +354,41 @@ transient frames cost ~32ms. This is why the status-dot pulse stays a 1Hz Faint
 toggle instead of breathing smoothly, and why any future always-on animation needs
 the render path made cheaper first.
 
-Where the time goes, if that is ever worth doing: `lipgloss.Style.Render` is 67% of
-a frame and `ansi.stringWidth` inside it is 42%, because hot loops call Render per
-cell or per rune (`fadingRule`, `renderNameWithMatches`, the nine per-row
-background segments) and each call re-does grapheme segmentation. The whole-frame
-`MaxWidth`/`MaxHeight` clamp in `View` is another 21% on its own.
+Those figures are after one optimisation pass; `internal/picker/bench_test.go`
+keeps them measurable. What that pass did, and what is left:
+
+- `fadingRule` wrote one `Style.Render` per cell. Render re-measures its input with
+  full grapheme segmentation, which for a one-cell string is pure overhead, and a
+  rule can be 200 cells wide several times a frame. It now emits SGR directly via
+  `fgSeq`. Help overlay: 1.89ms → 1.30ms.
+- `renderNameWithMatches` rendered per *rune*. It now batches into runs, since a
+  fuzzy match is a handful of runs, not a rune-length list. Filtered list: 4.97ms →
+  3.84ms.
+- Row segments were each wrapped in a second `Render` purely to carry the row
+  background — nine calls a row. Each segment now sets its own background, and the
+  row is plain concatenation.
+- The whole-frame `MaxWidth`/`MaxHeight` clamp in `View` was 18% of a frame by
+  itself. Only the height half survives (`clampHeight`, which needs no
+  measurement); width is established where content is built and asserted by
+  `TestFrameIsExactlyTerminalSized`.
+
+Net: **4.69ms → 3.39ms** at 30 sessions on 200x50, 6.60ms → 4.71ms in grid view,
+4.97ms → 2.98ms filtered. Still not enough for an always-on 30fps clock at 30
+sessions (10% of a core). The remaining cost is structural: `Style.Render` is 60%
+of a frame and `stringWidth` 41%, nearly all of it the per-panel `fitBox` Render
+measuring an entire panel to pin it. Going further means composing panels manually
+— padding each line to width and drawing borders ourselves — which is a much larger
+and riskier change than any of the above.
+
+Verify a rendering change did not alter output before trusting a speedup:
+`frameFingerprint` in `render_test.go` hashes the *cell attributes* of a frame
+(character plus every colour and style in effect), so it is insensitive to how the
+escape sequences are arranged but catches any visible difference. Both of the first
+two optimisations above were confirmed cell-identical that way; the third was not,
+and the difference turned out to be a latent bug it exposed — the selected row's
+tint broke either side of the name, because the name and branch were rendered
+without the row background and `onPlane` then filled the gap with the panel surface
+instead. Fixed by giving every segment the row background explicitly.
 
 Overlay entry is started centrally, by `Update` noticing that no overlay was open
 before a keypress and one is open after, so a new overlay cannot forget to animate.

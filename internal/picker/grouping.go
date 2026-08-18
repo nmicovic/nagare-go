@@ -11,6 +11,8 @@ import (
 const (
 	glyphMid = "├"
 	glyphEnd = "└"
+	// spacerRow separates adjacent project blocks without being selectable.
+	spacerRow = -2
 )
 
 // listRow is one rendered line in the list view: either a group header or a
@@ -50,9 +52,9 @@ func childLabel(s models.Session) string {
 	return s.Name
 }
 
-// buildRows turns a session list into display rows, inserting a header above
-// each group of two or more sessions sharing a tmux session name. A lone
-// session renders as it always has: no header, no glyph, full name.
+// buildRows turns a session list into display rows, inserting a project header
+// above every tmux session. Even a lone agent is a child: a consistent tree
+// keeps agent sigils and names aligned across the whole list.
 //
 // Sessions must already be in visual order, with group members contiguous —
 // sortFiltered guarantees this. Non-contiguous members would produce a header
@@ -63,15 +65,13 @@ func buildRows(sessions []models.Session) []listRow {
 		counts[groupKeyOf(s)]++
 	}
 
-	rows := make([]listRow, 0, len(sessions))
+	rows := make([]listRow, 0, len(sessions)*3)
 	for i, s := range sessions {
 		key := groupKeyOf(s)
-		if counts[key] < 2 {
-			rows = append(rows, listRow{SessionIdx: i, Label: s.Name})
-			continue
-		}
-
 		if i == 0 || groupKeyOf(sessions[i-1]) != key {
+			if len(rows) > 0 {
+				rows = append(rows, listRow{SessionIdx: spacerRow})
+			}
 			rows = append(rows, listRow{SessionIdx: -1, Group: key, Count: counts[key]})
 		}
 
@@ -79,7 +79,18 @@ func buildRows(sessions []models.Session) []listRow {
 		if i == len(sessions)-1 || groupKeyOf(sessions[i+1]) != key {
 			glyph = glyphEnd
 		}
-		rows = append(rows, listRow{SessionIdx: i, Label: childLabel(s), Glyph: glyph})
+		label := childLabel(s)
+		// A lone pane normally has the bare tmux session name, leaving nothing
+		// useful below a same-named header. Mirror the multi-pane fallback name
+		// locally without changing the session's real MCP/tmux identity.
+		if counts[key] == 1 && label == key {
+			agent := string(s.AgentType)
+			if agent == "" || s.AgentType == models.AgentUnknown {
+				agent = "session"
+			}
+			label = agent + "_01"
+		}
+		rows = append(rows, listRow{SessionIdx: i, Label: label, Glyph: glyph})
 	}
 	return rows
 }

@@ -40,7 +40,7 @@ func NewQuick() QuickModel {
 
 			huh.NewSelect[string]().
 				Title("Agent").
-				Options(huh.NewOptions("claude", "opencode", "pi")...).
+				Options(huh.NewOptions("claude", "codex", "opencode", "pi")...).
 				Value(&s.agent),
 		),
 	).WithTheme(formTheme()).WithShowHelp(true)
@@ -57,6 +57,11 @@ func (m QuickModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// Tell the form how much room it has. huh lays out at its own default
+		// width otherwise — about 98 cells — so on any narrower terminal the box
+		// was wider than the screen and every row wrapped. lipgloss.Place pads to
+		// the frame but never truncates, so nothing downstream caught it.
+		m.form = m.form.WithWidth(formWidth(msg.Width)).WithHeight(formHeight(msg.Height))
 	case tea.KeyMsg:
 		if msg.String() == "esc" {
 			return m, tea.Quit
@@ -84,7 +89,7 @@ func (m QuickModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m QuickModel) View() tea.View {
-	v := tea.NewView(m.view())
+	v := tea.NewView(clampFrame(m.view(), m.width, m.height))
 	v.AltScreen = true
 	return v
 }

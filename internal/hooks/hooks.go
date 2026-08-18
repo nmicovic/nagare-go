@@ -31,8 +31,8 @@ var needsInputTypes = map[string]bool{
 }
 
 // EventToState maps a hook event name to a state string. Event names come from
-// every supported agent: Claude Code (MixedCase), Gemini CLI (MixedCase),
-// pi extensions (snake_case), and OpenCode plugins (dotted.lowercase).
+// every supported agent: Claude Code, Codex, and Gemini CLI (MixedCase), pi
+// extensions (snake_case), and OpenCode plugins (dotted.lowercase).
 func EventToState(event, notificationType string) string {
 	switch event {
 	// Claude Code

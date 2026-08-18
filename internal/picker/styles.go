@@ -61,13 +61,36 @@ func truncate(name string, maxWidth int) string {
 	return ansi.Truncate(name, maxWidth, ellipsis)
 }
 
-// statusDot renders the colored ● marker for a session's status, with a
-// low-amplitude breathing Faint toggle on running/waiting sessions driven
-// by the 1Hz pulse tick. Idle and dead sessions render flat.
-func statusDot(status models.SessionStatus, pulseOn bool) string {
-	base := lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(status)))
-	if pulseOn && (status == models.StatusRunning || status == models.StatusWaitingInput) {
-		base = base.Faint(true)
+// statusDot renders the colored ● marker for a session's status. Running and
+// waiting sessions breathe; idle, dead and saved ones hold still, because motion
+// is the signal that something is happening.
+func statusDot(status models.SessionStatus, phase float64) string {
+	return statusDotOn(status, phase, nil)
+}
+
+// statusDotOn draws the dot over a known background, so a row's selection tint
+// runs unbroken behind it and the breath fades toward the right colour. Passing
+// nil leaves the background alone and fades toward the panel surface.
+//
+// The breath was a Faint toggle flipping once a second, which read as a blink
+// rather than a pulse — two states, and the transition between them instant. It is
+// now a colour walked toward the background and back on an eased curve. That is
+// what a fade is in a terminal: there is no opacity to animate, so the only thing
+// left to move is the colour itself.
+func statusDotOn(status models.SessionStatus, phase float64, bg color.Color) string {
+	fg := color.Color(lipgloss.Color(models.StatusColor(status)))
+
+	if breathes(status) {
+		toward := bg
+		if toward == nil {
+			toward = theme.Current().Colors.Surface
+		}
+		fg = theme.Mix(fg, toward, breathDepth*breathFactor(phase))
+	}
+
+	base := lipgloss.NewStyle().Foreground(fg)
+	if bg != nil {
+		base = base.Background(bg)
 	}
 	return base.Render("●")
 }
@@ -108,16 +131,34 @@ func renderNameWithMatches(display, full, query string, base lipgloss.Style, acc
 		return base.Render(display)
 	}
 
+	// Render in runs rather than per rune. A fuzzy match is a handful of runs, not
+	// a rune-length list of them, and Style.Render re-measures its input with full
+	// grapheme segmentation every call — so a 30-character name cost 30 of those
+	// instead of two or three. The cells produced are the same either way: the
+	// style is identical across a run.
 	matched := base.Foreground(accent)
-	var b []byte
-	for i, r := range displayRunes {
-		if _, ok := hit[i]; ok {
-			b = append(b, matched.Render(string(r))...)
-		} else {
-			b = append(b, base.Render(string(r))...)
+	styleFor := func(on bool) lipgloss.Style {
+		if on {
+			return matched
+		}
+		return base
+	}
+
+	var b strings.Builder
+	b.Grow(len(display) + 32)
+	runStart := 0
+	_, runOn := hit[0]
+	for i := 1; i <= len(displayRunes); i++ {
+		on := false
+		if i < len(displayRunes) {
+			_, on = hit[i]
+		}
+		if i == len(displayRunes) || on != runOn {
+			b.WriteString(styleFor(runOn).Render(string(displayRunes[runStart:i])))
+			runStart, runOn = i, on
 		}
 	}
-	return string(b)
+	return b.String()
 }
 
 // sectionHeader renders an inline section title followed by a fill line
@@ -141,15 +182,27 @@ func sectionHeader(title string, width int) string {
 
 // fadingRule draws a horizontal rule of n cells that blends from `from` to
 // `to`, so it dissolves into whatever it is drawn on.
+//
+// The colour changes every cell, so this writes the SGR sequences directly rather
+// than calling Style.Render per cell. Render re-measures the string it is given
+// with full grapheme segmentation, which for a one-cell string is pure overhead —
+// and a rule can be 200 cells wide, several times per frame. It was most of the
+// help screen's render cost on its own.
 func fadingRule(n int, from, to color.Color) string {
 	if n < 1 {
 		return ""
 	}
 	stops := lipgloss.Blend1D(n, from, to)
+
 	var b strings.Builder
+	b.Grow(n * 24)
 	for _, stop := range stops {
-		b.WriteString(lipgloss.NewStyle().Foreground(stop).Render("─"))
+		b.WriteString(fgSeq(stop))
+		b.WriteString("─")
 	}
+	// One reset at the end, so the rule does not tint what follows it. Each cell
+	// still carries only its own foreground: the next cell's sequence replaces it.
+	b.WriteString("\x1b[m")
 	return b.String()
 }
 
@@ -200,6 +253,13 @@ func onPlane(content string, bg color.Color) string {
 		lines[i] = set + reassertBg(line, set)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// fgSeq is the SGR sequence that sets c as the foreground. Same rationale as
+// bgSeq: used where a per-cell or per-run colour makes Style.Render too costly.
+func fgSeq(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
 }
 
 // bgSeq is the SGR sequence that sets bg as the background. Truecolor is

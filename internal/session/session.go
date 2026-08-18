@@ -159,6 +159,11 @@ func agentCommand(agent, projectPath string, continueSession bool) string {
 			return "pi -c"
 		}
 		return "pi"
+	case "codex":
+		if continueSession {
+			return "codex resume --last"
+		}
+		return "codex"
 	default: // claude
 		if continueSession && claudeSessionExists(projectPath) {
 			return "claude -c"

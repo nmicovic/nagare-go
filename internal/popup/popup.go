@@ -127,23 +127,27 @@ func (m Model) view() string {
 
 	c := theme.Current().Colors
 
-	innerWidth := m.width - 4
+	// The popup has no border, only Padding(1), so its content is two cells
+	// narrower than the popup — not four. The old figure left both separators
+	// short of the frame.
+	innerWidth := m.width - 2
 	if innerWidth < 10 {
 		innerWidth = 10
 	}
 
-	// Header
 	header := m.renderHeader(innerWidth)
+	hint := m.renderHintBar(innerWidth)
 
-	// Preview
-	previewHeight := m.height - 7 // header + separator + hint + padding
-	if previewHeight < 3 {
-		previewHeight = 3
+	// Measure the fixed chrome instead of assuming it: padding (2), the header,
+	// two separators, and the hint bar. Assuming a one-row hint made the frame a
+	// row too tall on a narrow terminal, and the clamp in View then cut the hint
+	// bar off — losing the keys exactly when the user needs them.
+	chrome := 2 + lipgloss.Height(header) + 2 + lipgloss.Height(hint)
+	previewHeight := m.height - chrome
+	if previewHeight < 1 {
+		previewHeight = 1
 	}
 	preview := m.renderPreview(innerWidth, previewHeight)
-
-	// Hint bar
-	hint := m.renderHintBar(innerWidth)
 
 	// Separator line
 	separator := lipgloss.NewStyle().
@@ -232,7 +236,7 @@ func (m Model) renderHintBar(width int) string {
 	c := theme.Current().Colors
 
 	var hints []string
-	hints = append(hints, fmt.Sprintf("Enter Jump"))
+	hints = append(hints, "Enter Jump")
 
 	if m.eventType == "needs_input" {
 		hints = append(hints, "Ctrl+y Allow")
@@ -244,14 +248,23 @@ func (m Model) renderHintBar(width int) string {
 	left := strings.Join(hints, "  ")
 	right := fmt.Sprintf("Auto-closing in %ds", m.countdown)
 
-	// Pad to align right
-	leftWidth := ansi.StringWidth(left)
-	rightWidth := ansi.StringWidth(right)
-	padding := width - leftWidth - rightWidth
-	if padding < 1 {
-		padding = 1
+	// The bar has to stay on one row. The popup renders inline at a fixed height,
+	// so a bar that wraps pushes the frame over and gets clipped — and the thing
+	// clipped is the bar itself. The old code floored the padding at 1 without
+	// checking whether the content fit at all, which is how that happened.
+	//
+	// The countdown goes first: the keys are what the popup is for.
+	if ansi.StringWidth(left)+ansi.StringWidth(right)+1 > width {
+		right = ""
+	}
+	if ansi.StringWidth(left) > width {
+		left = ansi.Truncate(left, width, "…")
+	}
+	if right == "" {
+		return left
 	}
 
+	padding := max(width-ansi.StringWidth(left)-ansi.StringWidth(right), 1)
 	return left + strings.Repeat(" ", padding) +
 		lipgloss.NewStyle().Foreground(c.Muted).Render(right)
 }

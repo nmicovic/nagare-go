@@ -61,18 +61,19 @@ func TestHitMapMatchesRenderedRows(t *testing.T) {
 		t.Fatal("no rows were recorded as clickable")
 	}
 
+	labels := make(map[int]string)
+	for _, listRow := range buildRows(m.filtered) {
+		if listRow.SessionIdx >= 0 {
+			labels[listRow.SessionIdx] = listRow.Label
+		}
+	}
 	for row, idx := range hits.sessionAt {
 		if row < 0 || row >= len(lines) {
 			t.Errorf("row %d recorded for session %d is outside the frame", row, idx)
 			continue
 		}
 		want := m.filtered[idx]
-		// Children of a group render with only their own name, so match on the
-		// last path segment rather than the full display name.
-		leaf := want.Name
-		if i := strings.LastIndex(leaf, "/"); i >= 0 {
-			leaf = leaf[i+1:]
-		}
+		leaf := labels[idx]
 		got := ansi.Strip(lines[row])
 		if !strings.Contains(got, leaf) {
 			t.Errorf("row %d maps to session %q but renders %q", row, want.Name, strings.TrimSpace(got))

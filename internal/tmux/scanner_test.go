@@ -98,6 +98,31 @@ func TestComputeDisplayNamesSinglePane(t *testing.T) {
 	}
 }
 
+func TestComputeDisplayNamesSinglePaneWithTaskName(t *testing.T) {
+	got := ComputeDisplayNames("work", []PaneInfo{
+		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "fix login redirect", PaneID: "%3"},
+	}, nil)
+	if got["%3"] != "work/fix login redirect" {
+		t.Errorf("single named pane = %q, want work/fix login redirect", got["%3"])
+	}
+}
+
+func TestComputeDisplayNamesRepairsPrefixedTaskName(t *testing.T) {
+	got := ComputeDisplayNames("cosmic-platform-backend", []PaneInfo{
+		{
+			WindowIndex: 0,
+			PaneIndex:   0,
+			AgentType:   models.AgentClaude,
+			WindowName:  "cosmic-platform-backend/cosmic-platform-backend/tracking-financials",
+			PaneID:      "%3",
+		},
+	}, nil)
+	want := "cosmic-platform-backend/tracking-financials"
+	if got["%3"] != want {
+		t.Errorf("repaired pane name = %q, want %q", got["%3"], want)
+	}
+}
+
 func TestComputeDisplayNamesCustomWindowName(t *testing.T) {
 	panes := []PaneInfo{
 		{WindowIndex: 0, PaneIndex: 0, AgentType: models.AgentClaude, WindowName: "? claude", PaneID: "%1"},
@@ -137,6 +162,18 @@ func TestParseAllPanesDetectsPi(t *testing.T) {
 	}
 	if p[0].AgentType != models.AgentPi {
 		t.Errorf("agent = %q, want %q", p[0].AgentType, models.AgentPi)
+	}
+}
+
+func TestParseAllPanesDetectsCodex(t *testing.T) {
+	raw := "proj:0:0:codex:12345:zsh:%1\n"
+	panes := ParseAllPanes(raw)
+	p, ok := panes["proj"]
+	if !ok || len(p) != 1 {
+		t.Fatalf("expected 1 Codex pane, got %v", panes)
+	}
+	if p[0].AgentType != models.AgentCodex {
+		t.Errorf("agent = %q, want %q", p[0].AgentType, models.AgentCodex)
 	}
 }
 

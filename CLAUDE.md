@@ -97,6 +97,15 @@ share one directory. Work is cached per path and refreshed per scan: the pane
 re-renders every frame for the status-dot pulse, so git must never be called from
 render.
 
+List rows show the git branch in the right-hand column, where the agent badge used to
+sit: with every pane usually running the same agent the branch is the more informative
+use of those columns, and the agent is still named in the detail pane and grid view.
+`branchFor` suppresses a branch that only repeats the row — Claude names a worktree's
+branch `worktree-<name>` — checking the worktree name as well as the label, since a lone
+pane in a worktree is labelled with its full `{session}/{worktree}` name.
+`splitRowWidth` divides the row: the label takes what it needs but never squeezes the
+branch below `minBranchWidth`.
+
 In the list view, sessions sharing a tmux session name are grouped under a single
 header row naming the repo, and children show only their own name — so the repo
 prefix is not repeated on every row. Grouping starts at two members; a lone session

@@ -1335,11 +1335,6 @@ func (m Model) renderListView(width, height int) string {
 		i := row.SessionIdx
 		s := m.filtered[i]
 		dot := statusDot(s.Status, m.pulseOn)
-		badge := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(models.AgentColor(s.AgentType))).
-			Background(lipgloss.Color(models.AgentBgColor(s.AgentType))).
-			Padding(0, 1).
-			Render(models.AgentLabel(s.AgentType))
 
 		star := ""
 		if m.isStarred(s.Name) {
@@ -1354,23 +1349,35 @@ func (m Model) renderListView(width, height int) string {
 		// hands every spare column to the name. The star sits inside the
 		// cluster ahead of the badge so a starred row does not shunt its
 		// badge out of the shared column.
-		right := starStyled + badge
 		// A grouped child is indented under its header and shows only its own
 		// name — the repo is on the header, so the prefix is not repeated.
 		prefix := ""
 		if row.Glyph != "" {
 			prefix = row.Glyph + " "
 		}
-		// Columns the row spends on anything that is not the name: leading
-		// space, the dot, the space after it, the tree prefix, the right
-		// cluster, at least one space separating name from badge, and a
-		// trailing gutter column.
-		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) + 1 + lipgloss.Width(right) + rowGutter
-		maxName := width - fixed
-		if maxName < minNameWidth {
-			maxName = minNameWidth
+
+		// The branch takes the right-hand column. The agent badge used to live
+		// there, but with every pane usually running the same agent the branch
+		// is the more informative use of those columns; the agent is still
+		// named in the detail pane and in grid view.
+		branch := branchFor(row.Label, s.Details.Worktree, s.Details.GitBranch)
+
+		// Columns the row spends on anything that is not text: leading space,
+		// the dot, the space after it, the tree prefix, the star, and the
+		// trailing gutter.
+		fixed := 1 + lipgloss.Width(dot) + 1 + lipgloss.Width(prefix) + lipgloss.Width(star) + rowGutter
+		avail := width - fixed
+		if avail < minNameWidth {
+			avail = minNameWidth
 		}
-		name := truncate(row.Label, maxName)
+		nameW, branchW := splitRowWidth(avail, lipgloss.Width(row.Label), lipgloss.Width(branch))
+		name := truncate(row.Label, nameW)
+		if branchW > 0 {
+			branch = truncate(branch, branchW)
+		} else {
+			branch = ""
+		}
+		branchStyled := mutedStyle().Render(branch)
 
 		// Selection: tint the row background (crush / lazygit / gh-dash
 		// convention) — no caret or gutter rune. Bold the text for an
@@ -1388,16 +1395,25 @@ func (m Model) renderListView(width, height int) string {
 		nameStyled := renderNameWithMatches(name, row.Label, m.query(), nameStyle, c.Accent)
 		prefixStyled := mutedStyle().Render(prefix)
 
-		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) - lipgloss.Width(nameStyled) - lipgloss.Width(right) - rowGutter
+		gap := width - 1 - lipgloss.Width(dot) - 1 - lipgloss.Width(prefixStyled) -
+			lipgloss.Width(nameStyled) - lipgloss.Width(starStyled) - lipgloss.Width(branchStyled) - rowGutter
 		if gap < 1 {
 			gap = 1
 		}
-		content := fmt.Sprintf(" %s %s%s%s%s", dot, prefixStyled, nameStyled, strings.Repeat(" ", gap), right)
-		line := lipgloss.NewStyle().
-			Background(rowBg).
-			Width(width).
-			Render(content)
-		lines = append(lines, line)
+
+		// Each segment carries the row background itself. Wrapping the finished
+		// string in one background style does not work: every inner style ends
+		// with a full reset, which clears the background for everything after
+		// it — leaving the tint on only the first and last column.
+		bg := lipgloss.NewStyle().Background(rowBg)
+		var content strings.Builder
+		for _, part := range []string{
+			" ", dot, " ", prefixStyled, nameStyled,
+			strings.Repeat(" ", gap), starStyled, branchStyled, strings.Repeat(" ", rowGutter),
+		} {
+			content.WriteString(bg.Render(part))
+		}
+		lines = append(lines, bg.Width(width).Render(content.String()))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1423,8 +1439,14 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	content := fmt.Sprintf(" %s%s%s", name, strings.Repeat(" ", gap), count)
-	return lipgloss.NewStyle().Background(c.Background).Width(width).Render(content)
+	// Per-segment background, for the same reason as the session rows: an inner
+	// reset would drop the tint for everything after it.
+	bg := lipgloss.NewStyle().Background(c.Background)
+	var content strings.Builder
+	for _, part := range []string{" ", name, strings.Repeat(" ", gap), count, strings.Repeat(" ", rowGutter)} {
+		content.WriteString(bg.Render(part))
+	}
+	return bg.Width(width).Render(content.String())
 }
 
 func (m Model) renderGridView(width, height int) string {

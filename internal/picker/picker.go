@@ -882,7 +882,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.renameSession = s
 			// The project already lives in the group header. Edit only the task
 			// name shown on the child row, never the technical "repo/window" ID.
-			m.searchInput.SetValue(childLabel(s))
+			m.searchInput.SetValue(renameWindowName(s, childLabel(s)))
 			m.searchInput.CursorEnd()
 		}
 		return m, nil
@@ -982,6 +982,15 @@ func (m Model) handleWorktreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// renameWindowName converts a picker display name into the unqualified name
+// tmux stores on the window. It also accepts a legacy or pasted
+// "session/window" value so the repository prefix can never become part of the
+// window name again.
+func renameWindowName(s models.Session, value string) string {
+	name := strings.TrimSpace(value)
+	return strings.TrimPrefix(name, s.SessionName+"/")
+}
+
 // handleRenameKey handles key input during rename mode.
 func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
@@ -993,7 +1002,7 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyEnter:
 		// Finish rename
-		newName := strings.TrimSpace(m.searchInput.Value())
+		newName := renameWindowName(m.renameSession, m.searchInput.Value())
 		m.renameMode = false
 		m.searchInput.SetValue("")
 

@@ -39,6 +39,13 @@ func TestEventToState(t *testing.T) {
 		{"session_start", "", "idle"},
 		{"session_shutdown", "", "dead"},
 
+		// OhMyPi extension events
+		{"auto_compaction_start", "", "working"},
+		{"auto_retry_start", "", "working"},
+		{"tool_approval_requested", "", "waiting_input"},
+		{"tool_approval_resolved", "", "working"},
+		{"agent_end", "", "idle"},
+
 		// OpenCode plugin events
 		{"session.status", "", "working"},
 		{"tool.execute.before", "", "working"},

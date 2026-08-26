@@ -74,21 +74,25 @@ func Run() error {
 		fmt.Printf("  Hooks: Codex — skipped (%v)\n", err)
 	}
 
-	// OpenCode and pi have no settings-file hook mechanism; they report status
-	// from a plugin and an extension instead.
+	// OpenCode, pi, and OhMyPi report status through a plugin or extension
+	// rather than a settings-file hook.
 	if err := installOpenCodePlugin(home, nagareBin); err != nil {
 		fmt.Printf("  Plugin: OpenCode — skipped (%v)\n", err)
 	}
 	if err := installPiExtension(home, nagareBin); err != nil {
 		fmt.Printf("  Extension: pi — skipped (%v)\n", err)
 	}
+	if err := installOhMyPiExtension(home, nagareBin); err != nil {
+		fmt.Printf("  Extension: OhMyPi — skipped (%v)\n", err)
+	}
 
 	// Register MCP server in all supported agents
 
-	// Claude Code + Gemini CLI use standard mcpServers format
+	// Claude Code, Gemini CLI, and OhMyPi use standard mcpServers format.
 	for _, mc := range []struct{ name, path string }{
 		{"Claude Code", filepath.Join(home, ".claude.json")},
 		{"Gemini CLI", filepath.Join(home, ".gemini", "settings.json")},
+		{"OhMyPi", filepath.Join(home, ".omp", "agent", "mcp.json")},
 	} {
 		if err := registerMCPStandard(mc.path, nagareBin); err != nil {
 			fmt.Printf("  MCP server: %s — skipped (%v)\n", mc.name, err)

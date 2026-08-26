@@ -31,8 +31,8 @@ var needsInputTypes = map[string]bool{
 }
 
 // EventToState maps a hook event name to a state string. Event names come from
-// every supported agent: Claude Code, Codex, and Gemini CLI (MixedCase), pi
-// extensions (snake_case), and OpenCode plugins (dotted.lowercase).
+// every supported agent: Claude Code, Codex, and Gemini CLI (MixedCase), pi and
+// OhMyPi extensions (snake_case), and OpenCode plugins (dotted.lowercase).
 func EventToState(event, notificationType string) string {
 	switch event {
 	// Claude Code
@@ -59,12 +59,15 @@ func EventToState(event, notificationType string) string {
 	case "AfterAgent":
 		return "idle"
 
-	// pi extension. pi has no permission prompts, so no waiting_input.
-	case "before_agent_start", "agent_start", "turn_start":
+	// pi and OhMyPi extensions. Shared lifecycle names map identically. pi
+	// settles with agent_settled; OhMyPi settles with agent_end and also exposes
+	// approval events.
+	case "before_agent_start", "agent_start", "turn_start",
+		"auto_compaction_start", "auto_retry_start", "tool_approval_resolved":
 		return "working"
-	case "agent_settled":
-		return "idle"
-	case "session_start":
+	case "tool_approval_requested":
+		return "waiting_input"
+	case "agent_settled", "agent_end", "session_start":
 		return "idle"
 	case "session_shutdown":
 		return "dead"

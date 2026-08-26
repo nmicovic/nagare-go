@@ -43,6 +43,12 @@ var agentArt = map[models.AgentType]string{
 		" ██║██║ \n" +
 		" ██║██║ \n" +
 		" ╚═╝╚═╝ ",
+	models.AgentOhMyPi: "" +
+		"╔══════╗\n" +
+		"║ OMP  ║\n" +
+		"║ ╭──╮ ║\n" +
+		"║ ╰──╯ ║\n" +
+		"╚══════╝",
 	models.AgentCodex: "" +
 		"██╗  ██╗\n" +
 		"╚██╗██╔╝\n" +
@@ -58,6 +64,7 @@ var agentGradients = map[models.AgentType][2]string{
 	models.AgentGemini:   {"#6fa8ff", "#2b5fc7"},
 	models.AgentCrush:    {"#ff8ce8", "#d43faa"},
 	models.AgentPi:       {"#c4b5fd", "#7c5cf0"},
+	models.AgentOhMyPi:   {"#ffe27a", "#d39b16"},
 	models.AgentCodex:    {"#34d399", "#078566"},
 }
 

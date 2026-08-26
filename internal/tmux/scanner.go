@@ -32,6 +32,7 @@ var agentProcesses = map[string]models.AgentType{
 	"claude":   models.AgentClaude,
 	"opencode": models.AgentOpenCode,
 	"pi":       models.AgentPi,
+	"omp":      models.AgentOhMyPi,
 	"codex":    models.AgentCodex,
 }
 
@@ -111,12 +112,14 @@ func ParseAllPanes(raw string) map[string][]PaneInfo {
 }
 
 // descendantAgents maps process names found in /proc cmdline to agent types.
-// pi appears here as well as in agentProcesses: the standalone binary shows up as
-// pane_current_command, while the npm install runs as a node descendant.
+// pi, OhMyPi, and codex appear here as well as in agentProcesses: standalone
+// binaries show up as pane_current_command, while npm installs run as node
+// descendants.
 var descendantAgents = map[string]models.AgentType{
 	"gemini": models.AgentGemini,
 	"crush":  models.AgentCrush,
 	"pi":     models.AgentPi,
+	"omp":    models.AgentOhMyPi,
 	"codex":  models.AgentCodex,
 }
 

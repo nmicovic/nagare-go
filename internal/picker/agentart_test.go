@@ -51,6 +51,24 @@ func TestAgentArtPi(t *testing.T) {
 	}
 }
 
+func TestAgentArtOhMyPi(t *testing.T) {
+	art, ok := agentArt[models.AgentOhMyPi]
+	if !ok {
+		t.Fatal("OhMyPi has no logo")
+	}
+	for i, line := range strings.Split(art, "\n") {
+		if w := ansi.PrintableRuneWidth(line); w != 8 {
+			t.Errorf("OhMyPi logo row %d is %d cells wide, want 8", i, w)
+		}
+	}
+	if renderAgentArt(models.AgentOhMyPi) == "" {
+		t.Error("renderAgentArt(OhMyPi) returned empty")
+	}
+	if renderAgentArtSmall(models.AgentOhMyPi) == "" {
+		t.Error("renderAgentArtSmall(OhMyPi) returned empty")
+	}
+}
+
 func TestAgentArtCodex(t *testing.T) {
 	art, ok := agentArt[models.AgentCodex]
 	if !ok || art == "" {

@@ -159,6 +159,11 @@ func agentCommand(agent, projectPath string, continueSession bool) string {
 			return "pi -c"
 		}
 		return "pi"
+	case "omp":
+		if continueSession {
+			return "omp -c"
+		}
+		return "omp"
 	case "codex":
 		if continueSession {
 			return "codex resume --last"

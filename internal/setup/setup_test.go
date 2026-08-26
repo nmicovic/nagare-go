@@ -199,6 +199,96 @@ func TestInstallPiExtensionIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstallOhMyPiExtension(t *testing.T) {
+	home := t.TempDir()
+	if err := installOhMyPiExtension(home, "/opt/bin/nagare-go"); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(home, ".omp", "agent", "extensions", "nagare.ts")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, `const NAGARE = "/opt/bin/nagare-go"`) {
+		t.Error("nagare binary path not embedded")
+	}
+	if !strings.Contains(content, `from "@oh-my-pi/pi-coding-agent"`) {
+		t.Error("extension does not import OhMyPi's extension API")
+	}
+
+	events := []string{
+		"session_start",
+		"before_agent_start",
+		"agent_start",
+		"turn_start",
+		"auto_compaction_start",
+		"auto_retry_start",
+		"tool_approval_requested",
+		"tool_approval_resolved",
+		"agent_end",
+		"session_shutdown",
+	}
+	for _, event := range events {
+		if !strings.Contains(content, `"`+event+`"`) {
+			t.Errorf("extension does not forward %q", event)
+		}
+		if state := hooks.EventToState(event, ""); state == "unknown" {
+			t.Errorf("forwarded event %q is not mapped by EventToState", event)
+		}
+	}
+	if strings.Contains(content, "agent_settled") {
+		t.Error("OhMyPi extension uses pi's unavailable agent_settled event")
+	}
+}
+
+func TestRegisterMCPOhMyPiPath(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".omp", "agent", "mcp.json")
+	if err := registerMCPStandard(path, "/opt/bin/nagare-go"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, ok := cfg["mcpServers"].(map[string]interface{})
+	if !ok {
+		t.Fatal("mcpServers key missing")
+	}
+	entry, ok := servers["nagare"].(map[string]interface{})
+	if !ok {
+		t.Fatal("nagare server missing")
+	}
+	if entry["command"] != "/opt/bin/nagare-go" {
+		t.Errorf("command = %v, want /opt/bin/nagare-go", entry["command"])
+	}
+	args, ok := entry["args"].([]interface{})
+	if !ok || len(args) != 1 || args[0] != "mcp" {
+		t.Errorf("args = %v, want [mcp]", entry["args"])
+	}
+}
+
+func TestInstallCommandsIncludesOhMyPi(t *testing.T) {
+	home := t.TempDir()
+	installCommands(home)
+
+	dir := filepath.Join(home, ".omp", "agent", "commands")
+	for name := range commands {
+		path := filepath.Join(dir, name+".md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("command %q not installed for OhMyPi: %v", name, err)
+			continue
+		}
+		if !strings.HasPrefix(string(data), "---\ndescription: ") {
+			t.Errorf("command %q has no OhMyPi frontmatter", name)
+		}
+	}
+}
+
 func TestInstallOpenCodePlugin(t *testing.T) {
 	home := t.TempDir()
 	if err := installOpenCodePlugin(home, "/opt/bin/nagare-go"); err != nil {

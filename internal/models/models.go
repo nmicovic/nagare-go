@@ -30,6 +30,8 @@ const (
 	AgentCrush AgentType = "crush"
 	// AgentPi represents the pi coding agent.
 	AgentPi AgentType = "pi"
+	// AgentOhMyPi represents the Oh My Pi coding agent.
+	AgentOhMyPi AgentType = "omp"
 	// AgentCodex represents the OpenAI Codex coding agent.
 	AgentCodex AgentType = "codex"
 	// AgentUnknown represents an unrecognized agent.
@@ -123,6 +125,8 @@ func AgentLabel(a AgentType) string {
 		return "Crush"
 	case AgentPi:
 		return "Pi"
+	case AgentOhMyPi:
+		return "OhMyPi"
 	case AgentCodex:
 		return "Codex"
 	default:
@@ -143,6 +147,8 @@ func AgentColor(a AgentType) string {
 		return "#ff5fd7"
 	case AgentPi:
 		return "#a78bfa"
+	case AgentOhMyPi:
+		return "#f5c542"
 	case AgentCodex:
 		return "#10a37f"
 	default:
@@ -163,6 +169,8 @@ func AgentBgColor(a AgentType) string {
 		return "#3b1a33"
 	case AgentPi:
 		return "#241b3b"
+	case AgentOhMyPi:
+		return "#332b12"
 	case AgentCodex:
 		return "#12352d"
 	default:

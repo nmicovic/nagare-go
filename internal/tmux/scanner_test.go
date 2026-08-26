@@ -165,6 +165,20 @@ func TestParseAllPanesDetectsPi(t *testing.T) {
 	}
 }
 
+// OhMyPi is detectable by its omp executable name.
+func TestParseAllPanesDetectsOhMyPi(t *testing.T) {
+	raw := "proj:0:0:omp:12345:zsh:%1\n"
+	panes := ParseAllPanes(raw)
+
+	p, ok := panes["proj"]
+	if !ok || len(p) != 1 {
+		t.Fatalf("expected 1 OhMyPi pane, got %v", panes)
+	}
+	if p[0].AgentType != models.AgentOhMyPi {
+		t.Errorf("agent = %q, want %q", p[0].AgentType, models.AgentOhMyPi)
+	}
+}
+
 func TestParseAllPanesDetectsCodex(t *testing.T) {
 	raw := "proj:0:0:codex:12345:zsh:%1\n"
 	panes := ParseAllPanes(raw)

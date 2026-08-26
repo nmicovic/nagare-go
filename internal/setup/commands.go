@@ -100,6 +100,14 @@ func installCommands(home string) {
 				return piPromptTemplate(description, prompt)
 			},
 		},
+		{
+			label: "OhMyPi",
+			dir:   filepath.Join(home, ".omp", "agent", "commands"),
+			ext:   ".md",
+			format: func(_, description, prompt string) string {
+				return fmt.Sprintf("---\ndescription: %s\n---\n\n%s\n", description, prompt)
+			},
+		},
 	}
 	for _, t := range targets {
 		if err := writeCommandFiles(t); err != nil {

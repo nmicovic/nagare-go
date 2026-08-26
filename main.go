@@ -129,7 +129,7 @@ func main() {
 			return nil
 		},
 	}
-	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, codex, opencode, gemini, crush, pi)")
+	newCmd.Flags().StringP("agent", "a", "claude", "Agent type (claude, codex, opencode, gemini, crush, pi, omp)")
 	newCmd.Flags().StringP("name", "n", "", "Session name (default: path basename)")
 	newCmd.Flags().BoolP("continue", "c", true, "Continue previous session")
 	newCmd.Flags().StringP("worktree", "w", "", "Create a named git worktree and start the agent in it")

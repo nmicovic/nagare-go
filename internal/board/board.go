@@ -685,7 +685,9 @@ func (m Model) renderColumn(index, width, height int) string {
 	contentWidth := max(12, width-4)
 	contentHeight := max(5, height-2)
 
-	statusStyle := lipgloss.NewStyle().Foreground(statusColor(status)).Bold(true)
+	laneBackground := colors.Surface
+	laneFill := lipgloss.NewStyle().Background(laneBackground)
+	statusStyle := lipgloss.NewStyle().Foreground(statusColor(status)).Background(laneBackground).Bold(true)
 	title := statusStyle.Render(statusIcon(status) + " " + tickets.StatusLabel(status))
 	countStyle := lipgloss.NewStyle().Foreground(colors.Muted).Background(colors.Overlay).Padding(0, 1)
 	if focused {
@@ -693,8 +695,11 @@ func (m Model) renderColumn(index, width, height int) string {
 	}
 	count := countStyle.Render(fmt.Sprintf("%d", len(items)))
 	gap := max(1, contentWidth-lipgloss.Width(title)-lipgloss.Width(count))
-	content := title + strings.Repeat(" ", gap) + count
-	content += "\n" + lipgloss.NewStyle().Foreground(colors.Border).Render(strings.Repeat("─", contentWidth))
+	content := title + laneFill.Render(strings.Repeat(" ", gap)) + count
+	content += "\n" + lipgloss.NewStyle().
+		Foreground(colors.Border).
+		Background(laneBackground).
+		Render(strings.Repeat("─", contentWidth))
 
 	available := max(1, (contentHeight-2)/5)
 	cursor := m.cursors[status]
@@ -706,8 +711,14 @@ func (m Model) renderColumn(index, width, height int) string {
 		content += "\n" + m.renderCard(items[itemIndex], contentWidth, focused && itemIndex == cursor)
 	}
 	if len(items) == 0 {
-		empty := lipgloss.NewStyle().Foreground(colors.Muted).Italic(true).Render(emptyColumnCopy(status))
-		content += "\n\n" + lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, empty)
+		empty := lipgloss.NewStyle().
+			Width(contentWidth).
+			Align(lipgloss.Center).
+			Foreground(colors.Muted).
+			Background(laneBackground).
+			Italic(true).
+			Render(emptyColumnCopy(status))
+		content += "\n\n" + empty
 	}
 
 	style := lipgloss.NewStyle().
@@ -718,7 +729,7 @@ func (m Model) renderColumn(index, width, height int) string {
 		BorderForeground(colors.Border).
 		Padding(0, 1)
 	if focused {
-		style = style.BorderForegroundBlend(colors.Primary, colors.Secondary, colors.Primary)
+		style = style.BorderForeground(colors.BorderFocus)
 	}
 	return style.Render(content)
 }
@@ -800,34 +811,48 @@ func (m Model) renderCard(ticket tickets.Ticket, width int, selected bool) strin
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
-	priority := priorityLabel(ticket.Priority)
-	bottom := lipgloss.PlaceHorizontal(bodyWidth, lipgloss.Right, priority)
-	if len(shortID)+1+lipgloss.Width(priority) <= bodyWidth {
-		bottomGap := bodyWidth - len(shortID) - lipgloss.Width(priority)
-		bottom = lipgloss.NewStyle().Foreground(colors.Muted).Render(shortID) + strings.Repeat(" ", bottomGap) + priority
+	cardBackground := colors.Overlay
+	fill := lipgloss.NewStyle().Background(cardBackground)
+	priority := priorityLabel(ticket.Priority, cardBackground)
+	priorityWidth := lipgloss.Width(priority)
+	bottom := fill.Render(strings.Repeat(" ", max(0, bodyWidth-priorityWidth))) + priority
+	if len(shortID)+1+priorityWidth <= bodyWidth {
+		bottomGap := bodyWidth - len(shortID) - priorityWidth
+		bottom = lipgloss.NewStyle().
+			Foreground(colors.Muted).
+			Background(cardBackground).
+			Render(shortID) +
+			fill.Render(strings.Repeat(" ", bottomGap)) +
+			priority
 	}
 
 	style := lipgloss.NewStyle().
 		Width(width).
-		Background(colors.Overlay).
+		Background(cardBackground).
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(colors.Border).
 		Padding(0, 1)
-	titleStyle := lipgloss.NewStyle().Foreground(colors.Foreground)
+	titleStyle := lipgloss.NewStyle().
+		Width(bodyWidth).
+		Foreground(colors.Foreground).
+		Background(cardBackground)
 	if selected {
-		style = style.Background(colors.SelBg).
-			BorderForegroundBlend(colors.Accent, colors.Primary, colors.Accent)
+		style = style.BorderForeground(colors.BorderFocus)
 		titleStyle = titleStyle.Foreground(colors.Primary).Bold(true)
 	}
+	metaStyle := lipgloss.NewStyle().
+		Width(bodyWidth).
+		Foreground(colors.Subtle).
+		Background(cardBackground)
 	body := titleStyle.Render(ansi.Truncate(title, bodyWidth, "…")) + "\n" +
-		lipgloss.NewStyle().Foreground(colors.Subtle).Render(ansi.Truncate(meta, bodyWidth, "…")) + "\n" +
+		metaStyle.Render(ansi.Truncate(meta, bodyWidth, "…")) + "\n" +
 		bottom
 	return style.Render(body)
 }
 
-func priorityLabel(priority tickets.Priority) string {
+func priorityLabel(priority tickets.Priority, background color.Color) string {
 	colors := theme.Current().Colors
-	style := lipgloss.NewStyle().Bold(true)
+	style := lipgloss.NewStyle().Bold(true).Background(background)
 	switch priority {
 	case tickets.PriorityUrgent:
 		return style.Foreground(colors.Error).Render("!! URGENT")

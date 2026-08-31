@@ -3,12 +3,15 @@ package board
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"fmt"
 	"github.com/charmbracelet/x/ansi"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tickets"
 )
 
@@ -289,4 +292,60 @@ func TestDeleteRequiresConfirmationAndRemovesSelectedTicket(t *testing.T) {
 	if !strings.Contains(model.statusNote, "Delete me") {
 		t.Fatalf("delete status = %q, want deleted ticket title", model.statusNote)
 	}
+}
+
+func TestBoardPlanesStaySolidAcrossThemes(t *testing.T) {
+	originalTheme := theme.Current().Name
+	defer func() {
+		_ = theme.Set(originalTheme)
+		theme.SetDarkBackground(true)
+	}()
+
+	ticket := tickets.Ticket{
+		ID:       "12345678-abcd",
+		Title:    "Solid card",
+		Status:   tickets.StatusReady,
+		Priority: tickets.PriorityMedium,
+	}
+	for _, name := range theme.Names() {
+		if err := theme.Set(name); err != nil {
+			t.Fatal(err)
+		}
+		for _, dark := range []bool{true, false} {
+			theme.SetDarkBackground(dark)
+			colors := theme.Current().Colors
+
+			card := (Model{}).renderCard(ticket, 30, true)
+			overlay := backgroundSequence(colors.Overlay)
+			if !strings.Contains(card, overlay) {
+				t.Errorf("theme %q dark=%v: selected card does not use the overlay plane", name, dark)
+			}
+			selected := backgroundSequence(colors.SelBg)
+			if selected != overlay && strings.Contains(card, selected) {
+				t.Errorf("theme %q dark=%v: selected card reintroduced the saturated selection fill", name, dark)
+			}
+
+			model := Model{
+				column:    statusIndex(tickets.StatusBacklog),
+				cursors:   map[tickets.Status]int{},
+				todayOnly: false,
+			}
+			column := model.renderColumn(model.column, 30, 12)
+			copyAt := strings.Index(column, emptyColumnCopy(tickets.StatusBacklog))
+			if copyAt < 0 {
+				t.Fatalf("theme %q dark=%v: empty copy missing", name, dark)
+			}
+			prefix := column[:copyAt]
+			backgroundAt := strings.LastIndex(prefix, backgroundSequence(colors.Surface))
+			resetAt := strings.LastIndex(prefix, "\x1b[0m")
+			if backgroundAt < resetAt {
+				t.Errorf("theme %q dark=%v: empty copy falls back to a different background", name, dark)
+			}
+		}
+	}
+}
+
+func backgroundSequence(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
 }

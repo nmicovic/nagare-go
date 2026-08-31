@@ -10,7 +10,7 @@ import (
 // piExtensionTemplate is the nagare extension installed into pi. The single
 // verb is %q, the absolute path to the nagare binary.
 //
-// pi has no MCP client by design, so the five nagare messaging tools are
+// pi has no MCP client by design, so Nagare's messaging and ticket tools are
 // registered as pi tools that shell out to "nagare-go tool <name> <json>".
 // That bridge calls the same handlers the MCP server calls, so pi behaves
 // identically to the MCP-based agents.
@@ -90,6 +90,48 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute(_id, _params, signal) {
       return callTool(pi, "list_agents", {}, signal);
+    },
+  });
+
+  pi.registerTool({
+    name: "list_tickets",
+    label: "Nagare: list tickets",
+    description: "List Nagare tickets, optionally filtered by status, project, or today's work",
+    promptSnippet: "List work tracked on the Nagare ticket board",
+    parameters: Type.Object({
+      status: Type.Optional(Type.String({ description: "workflow status" })),
+      project_path: Type.Optional(Type.String({ description: "exact project path" })),
+      today: Type.Optional(Type.Boolean({ description: "only today's and active work" })),
+    }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "list_tickets", params, signal);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_ticket",
+    label: "Nagare: get ticket",
+    description: "Get the full context for a Nagare ticket",
+    promptSnippet: "Read a Nagare ticket's context and acceptance criteria",
+    parameters: Type.Object({
+      ticket_id: Type.String({ description: "ticket ID or unique prefix" }),
+    }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "get_ticket", params, signal);
+    },
+  });
+
+  pi.registerTool({
+    name: "submit_ticket",
+    label: "Nagare: submit ticket",
+    description: "Submit your assigned running ticket for human review",
+    promptSnippet: "Hand completed and verified ticket work back for human review",
+    parameters: Type.Object({
+      ticket_id: Type.String({ description: "assigned ticket ID or unique prefix" }),
+      summary: Type.String({ description: "implementation and verification summary" }),
+    }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "submit_ticket", params, signal);
     },
   });
 

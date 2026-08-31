@@ -31,6 +31,8 @@ func hintsFor(m Model) []hint {
 		return []hint{{"y", "Remove worktree"}, {"n / Esc", "Keep it"}}
 	case m.promptMode:
 		return []hint{{"Enter", "Send"}, {"Esc", "Cancel"}}
+	case m.noteMode:
+		return []hint{{"Enter", "Save"}, {"Esc", "Cancel"}}
 	case m.renameMode:
 		return []hint{{"Enter", "Save name"}, {"Esc", "Cancel"}}
 	case m.worktreeMode:
@@ -85,7 +87,7 @@ func hintsFor(m Model) []hint {
 		hints = append(hints, hint{"F2", "Name task"})
 	}
 	if ok {
-		hints = append(hints, hint{"F3", "Worktree"})
+		hints = append(hints, hint{"F3", "Worktree"}, hint{"F5", "Note"})
 	}
 	hints = append(hints, hint{"^n", "New"}, hint{"^f", "Star"}, hint{"^o", "Sort"})
 
@@ -108,7 +110,7 @@ func helpBar(m Model, width int) string {
 
 	tail := []hint{{"F1", "More"}, {"Esc", "Quit"}}
 	if m.showHelp || m.showThemePick || m.confirmMode || m.promptMode ||
-		m.renameMode || m.worktreeMode {
+		m.renameMode || m.worktreeMode || m.noteMode {
 		// A mode's own footer already names its exit; "More"/"Quit" would be
 		// wrong there, since F1 and Esc mean something else.
 		tail = nil
@@ -169,7 +171,8 @@ func helpColumns() ([]helpSection, []helpSection) {
 			{"Esc", "Quit nagare"},
 		}},
 		{"Views", [][2]string{
-			{"Tab", "Toggle list / grid view"},
+			{"Tab", "Cycle list / board / grid"},
+			{"Shift+Tab", "Cycle views backward"},
 			{"Ctrl+t", "Pick a color theme"},
 			{"Ctrl+s", "Show saved sessions"},
 			{"F1", "Toggle this screen"},
@@ -197,6 +200,7 @@ func helpColumns() ([]helpSection, []helpSection) {
 			{"Ctrl+r", "Quick prototype"},
 			{"F2", "Name selected task"},
 			{"F3", "New git worktree"},
+			{"F5", "Edit session note"},
 			{"Ctrl+f", "Toggle star"},
 			{"Ctrl+o", "Cycle sort mode"},
 		}},

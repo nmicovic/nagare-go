@@ -10,7 +10,7 @@ import (
 
 // ToolNames returns the bridgeable tool names, sorted.
 func ToolNames() []string {
-	names := make([]string, 0, 5)
+	names := make([]string, 0, len(bridgeTools))
 	for name := range bridgeTools {
 		names = append(names, name)
 	}
@@ -24,6 +24,27 @@ func ToolNames() []string {
 var bridgeTools = map[string]func(ctx context.Context, mySession string, args []byte) (string, error){
 	"list_agents": func(_ context.Context, mySession string, _ []byte) (string, error) {
 		return ListAgentsHandler(mySession), nil
+	},
+	"list_tickets": func(_ context.Context, _ string, args []byte) (string, error) {
+		var input ListTicketsInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return ListTicketsHandler(input), nil
+	},
+	"get_ticket": func(_ context.Context, _ string, args []byte) (string, error) {
+		var input GetTicketInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return GetTicketHandler(input), nil
+	},
+	"submit_ticket": func(_ context.Context, mySession string, args []byte) (string, error) {
+		var input SubmitTicketInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return SubmitTicketHandler(mySession, input), nil
 	},
 	"send_message": func(_ context.Context, mySession string, args []byte) (string, error) {
 		var input SendMessageInput

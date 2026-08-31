@@ -17,6 +17,7 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)
 - **Inter-Agent Messaging** — MCP server lets agents discover, message, and coordinate with each other (pi has no MCP client, so it gets the same tools through a CLI bridge; OhMyPi uses native MCP)
+- **Ticket Board** — a local cross-project kanban for today's work, with durable tickets, agent delegation, and human review
 - **6 Themes** — tokyonight, catppuccin, dracula, gruvbox, monokai, nord
 - **3ms Startup** — compiled Go binary, no runtime dependencies
 
@@ -47,8 +48,7 @@ This does three things:
    | OpenCode | plugin at `~/.config/opencode/plugins/nagare.js` |
    | pi | extension at `~/.pi/agent/extensions/nagare.ts` |
    | OhMyPi (`omp`) | extension at `~/.omp/agent/extensions/nagare.ts` |
-
-2. **Registers the MCP server** in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`, `~/.config/opencode/opencode.json`, `~/.config/crush/crush.json`, and `~/.omp/agent/mcp.json` — enabling inter-agent messaging. pi has no MCP client by design, so its extension registers the same five tools and routes them through `nagare-go tool`.
+2. **Registers the MCP server** in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`, `~/.config/opencode/opencode.json`, `~/.config/crush/crush.json`, and `~/.omp/agent/mcp.json` — enabling inter-agent messaging and ticket handoff. pi has no MCP client by design, so its extension registers the same tools and routes them through `nagare-go tool`.
 
 3. **Installs messaging workflows** as slash commands (`/nagare-ls`, `/nagare-send`, `/nagare-send-wait`, `/nagare-inbox`) for Claude Code, Gemini CLI, OpenCode, pi, and OhMyPi — and as Agent Skills for Codex and Crush.
 
@@ -73,10 +73,27 @@ nagare-go              # open session picker (default)
 nagare-go new ~/proj   # create new session with Claude (-a codex|opencode|gemini|crush|pi|omp)
 nagare-go new ~/proj -w my-feature   # start an agent in a new named git worktree
 nagare-go new myproto  # quick prototype (creates in ~/Prototypes/)
+nagare-go board        # cross-project ticket board and agent delegation
 nagare-go notifs       # notification center + settings
 nagare-go setup        # install status reporting + MCP server + slash commands
 nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 ```
+
+## Board Keybindings
+
+| Key | Action |
+|-----|--------|
+| `h/l` or arrows | Move between columns |
+| `j/k` or arrows | Select a ticket |
+| `[` / `]` | Move ticket left / right |
+| `n` | Create ticket |
+| `e` | Edit ticket |
+| `d` | Delegate to an available idle agent |
+| `a` | Show available agents |
+| Enter | Jump to the assigned agent |
+| `t` | Toggle Today / All |
+| Tab / Shift+Tab | Cycle list / board / grid forward or backward |
+| `q` / Esc | Quit |
 
 ## Picker Keybindings
 
@@ -85,13 +102,14 @@ nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 | Type | Fuzzy search |
 | Enter | Jump to session |
 | Esc | Quit |
-| Tab | Toggle list/grid |
+| Tab / Shift+Tab | Cycle list / board / grid forward or backward |
 | Ctrl+y/a | Approve permission |
 | Ctrl+f | Star session |
 | Ctrl+o | Cycle sort |
 | Ctrl+w | Unload agent |
 | Ctrl+x | Kill session |
 | F2 | Name the selected task |
+| F5 | Session note |
 | Ctrl+n | New session |
 | Ctrl+r | Quick prototype |
 | Ctrl+l | Inline prompt |

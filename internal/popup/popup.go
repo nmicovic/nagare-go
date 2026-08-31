@@ -44,6 +44,7 @@ type tickMsg struct{}
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
+		tea.RequestBackgroundColor,
 		tickCmd(),
 		m.doPreview(),
 	)
@@ -66,6 +67,10 @@ type previewMsg string
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		theme.SetDarkBackground(msg.IsDark())
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

@@ -6,9 +6,9 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/compat"
 	"github.com/lucasb-eyer/go-colorful"
 )
 
@@ -73,20 +73,34 @@ type Colors struct {
 
 // Pair is a dark/light color pair.
 //
-// It implements color.Color by resolving against the terminal background that
-// lipgloss detected at startup, exactly like compat.AdaptiveColor. Unlike
-// AdaptiveColor it keeps both halves reachable, which is what lets derived
-// tokens be computed *per mode*: elevating a surface means something different
-// on a #1a1b26 canvas than on a #d5d6db one, and a single resolved color could
-// only ever get one of them right.
+// It implements color.Color by resolving against the latest terminal
+// background reported by Bubble Tea. Unlike AdaptiveColor it keeps both halves
+// reachable, which lets derived tokens be computed per mode.
 type Pair struct {
 	Dark  color.Color
 	Light color.Color
 }
 
+var darkBackground atomic.Bool
+
+func init() {
+	// Render immediately with the established dark palette. Bubble Tea updates
+	// this asynchronously when the terminal answers its background-color query.
+	darkBackground.Store(true)
+}
+
+// SetDarkBackground updates adaptive theme resolution without blocking on a
+// terminal query.
+func SetDarkBackground(dark bool) {
+	darkBackground.Store(dark)
+}
+
 // RGBA implements color.Color.
 func (p Pair) RGBA() (r, g, b, a uint32) {
-	return compat.AdaptiveColor{Dark: p.Dark, Light: p.Light}.RGBA()
+	if darkBackground.Load() {
+		return p.Dark.RGBA()
+	}
+	return p.Light.RGBA()
 }
 
 // adapt builds a dark/light-aware color from two hex strings. Themes use this

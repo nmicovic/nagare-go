@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nemke/nagare-go/internal/board"
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
@@ -22,6 +23,7 @@ import (
 	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemke/nagare-go/internal/tickets"
 	"github.com/nemke/nagare-go/internal/tmux"
 	"github.com/sahilm/fuzzy"
 )
@@ -31,6 +33,7 @@ type ViewMode int
 
 const (
 	ListView ViewMode = iota
+	BoardView
 	GridView
 )
 
@@ -56,6 +59,8 @@ const (
 	ActionNone       = ""
 	ActionNew        = "new"
 	ActionQuickProto = "quickproto"
+	ActionTicketNew  = "ticket-new"
+	ActionTicketEdit = "ticket-edit"
 )
 
 // Result is returned when the picker exits with a special action.
@@ -84,6 +89,7 @@ type Model struct {
 	themeOriginal string            // theme before opening picker (for cancel)
 	showSaved     bool              // show saved (unloaded) sessions
 	gridPreviews  map[string]string // cached grid cell previews keyed by pane target
+	ticketBoard   board.Model
 	registry      *state.Registry
 	renameMode    bool
 	renameSession models.Session
@@ -100,6 +106,10 @@ type Model struct {
 	promptMode    bool
 	promptTarget  models.Session
 	promptInput   textinput.Model
+	noteMode      bool
+	noteTarget    models.Session
+	noteInput     textinput.Model
+	notes         *state.Notes
 	lastQuery     string   // previous search query, to detect query changes in applyFilter
 	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
 	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
@@ -129,8 +139,14 @@ func New() Model {
 	pi.CharLimit = 500
 	pi.SetWidth(60)
 
+	ni := textinput.New()
+	ni.Placeholder = "leave a note..."
+	ni.CharLimit = 200
+	ni.SetWidth(60)
+
 	cfg, _ := config.Load()
 
+	ticketStore := tickets.NewStore(tickets.DefaultDir())
 	return Model{
 		statesDir:    state.DefaultStatesDir(),
 		searchInput:  ti,
@@ -140,12 +156,25 @@ func New() Model {
 		overlayAnim:  newOverlayAnim(),
 		registry:     state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput:  pi,
+		noteInput:    ni,
+		notes:        state.NewNotes(state.DefaultNotesPath()),
 		workCache:    make(map[string]git.Work),
 		flashes:      make(map[string]flashState),
 		history:      make(map[string][]uint8),
 		prevStatus:   make(map[string]models.SessionStatus),
 		spinner:      newSpinner(),
+		ticketBoard:  board.NewDeferred(ticketStore),
 	}
+}
+
+// NewWithView creates a picker that starts in the requested top-level view.
+func NewWithView(view ViewMode) Model {
+	model := New()
+	model.viewMode = view
+	if view == BoardView {
+		model.ticketBoard.Activate()
+	}
+	return model
 }
 
 // markDead writes a dead state for a session before killing it.
@@ -303,18 +332,25 @@ func (m Model) Init() tea.Cmd {
 	if m.testNoScan {
 		return nil
 	}
-	return tea.Batch(
-		doScan(m.statesDir),
-		doPreviewTick(),
-		doBreathTick(),
-	)
+	commands := []tea.Cmd{tea.RequestBackgroundColor, doScan(m.statesDir), doPreviewTick(), doBreathTick()}
+	if m.viewMode == BoardView {
+		commands = append(commands, m.ticketBoard.Init())
+	}
+	return tea.Batch(commands...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		theme.SetDarkBackground(msg.IsDark())
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if next, _ := m.ticketBoard.Update(msg); next != nil {
+			m.ticketBoard = next.(board.Model)
+		}
 		return m, nil
 
 	case mouseSelectMsg:
@@ -393,6 +429,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionsUpdatedMsg:
 		m.sessions = []models.Session(msg)
+		m.ticketBoard.SetSessions(m.sessions)
 		if m.pending != nil && m.pending.satisfiedBy(m.sessions) {
 			log.Info("worktree %q is live", m.pending.name)
 			// Hand the eye off from the spinner to the row that just appeared. The
@@ -478,6 +515,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, doAnimTick()
 
 	case tea.KeyMsg:
+		if m.viewMode == BoardView {
+			switch msg.String() {
+			case keyToggleView:
+				return m, m.cycleView(1)
+			case keyReverseView:
+				return m, m.cycleView(-1)
+			}
+			next, cmd := m.ticketBoard.Update(msg)
+			if updated, ok := next.(board.Model); ok {
+				m.ticketBoard = updated
+			}
+			switch result := m.ticketBoard.Result(); result.Action {
+			case board.ActionNew:
+				m.result = Result{Action: ActionTicketNew}
+				return m, tea.Quit
+			case board.ActionEdit:
+				m.result = Result{Action: ActionTicketEdit, Target: result.TicketID}
+				return m, tea.Quit
+			}
+			return m, cmd
+		}
 		wasOpen := m.overlayOpen()
 		prevCursor, prevLen := m.cursor, len(m.filtered)
 
@@ -532,7 +590,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	return m, nil
+	next, cmd := m.ticketBoard.Update(msg)
+	if updated, ok := next.(board.Model); ok {
+		m.ticketBoard = updated
+	}
+	return m, cmd
+}
+
+func (m *Model) cycleView(delta int) tea.Cmd {
+	const viewCount = int(GridView) + 1
+	previous := m.viewMode
+	next := (int(previous) + delta + viewCount) % viewCount
+	m.viewMode = ViewMode(next)
+	if previous == BoardView && m.viewMode != BoardView {
+		m.ticketBoard.Deactivate()
+	}
+
+	switch m.viewMode {
+	case ListView:
+		m.gridOrder = nil
+		log.Info("switched to list view")
+	case BoardView:
+		m.ticketBoard.SetSessions(m.sessions)
+		log.Info("switched to board view")
+		if !m.testNoScan {
+			return m.ticketBoard.Activate()
+		}
+	case GridView:
+		m.gridOrder = nil
+		m.applyFilter()
+		log.Info("switched to grid view")
+	}
+	return nil
 }
 
 func (m Model) View() tea.View {
@@ -587,6 +676,9 @@ func clampHeight(content string, height int) string {
 }
 
 func (m Model) view() (string, hitTargets) {
+	if m.viewMode == BoardView {
+		return m.ticketBoard.View().Content, hitTargets{}
+	}
 	if m.width == 0 {
 		return "Loading...", hitTargets{}
 	}
@@ -633,6 +725,10 @@ func (m Model) view() (string, hitTargets) {
 		overlay, dismissable = helpOverlay(m.width, m.height), true
 	case m.showThemePick:
 		overlay, dismissable = themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height), true
+	case m.noteMode:
+		// Not dismissable: a half-typed note should not be thrown away by a
+		// stray click, same as the prompt and the confirm dialog.
+		overlay = m.renderNoteOverlay()
 	case m.promptMode:
 		// Not dismissable: a half-typed prompt should not be thrown away by a
 		// stray click, and neither should a pending destructive answer.
@@ -720,6 +816,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmKey(msg)
 	}
 
+	if m.noteMode {
+		return m.handleNoteKey(msg)
+	}
+
 	// Prompt mode intercepts keys
 	if m.promptMode {
 		return m.handlePromptKey(msg)
@@ -768,18 +868,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.doPreview()
 	case keyToggleView:
-		if m.viewMode == ListView {
-			m.viewMode = GridView
-			// Fresh snapshot: start grid from current sorted order, then freeze.
-			m.gridOrder = nil
-			m.applyFilter()
-			log.Info("switched to grid view")
-		} else {
-			m.viewMode = ListView
-			m.gridOrder = nil
-			log.Info("switched to list view")
-		}
-		return m, nil
+		return m, m.cycleView(1)
+	case keyReverseView:
+		return m, m.cycleView(-1)
 	case keyCycleTheme:
 		m.showThemePick = true
 		m.themeNames = theme.Names()
@@ -913,6 +1004,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.openEditorPrompt()
 		}
 		return m, nil
+	case keyNote:
+		return m.openNote()
 	case keyNextAttention:
 		return m.jumpToNextAttention()
 	case keyEditConfig:
@@ -1016,6 +1109,11 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		target := fmt.Sprintf("%s:%d", m.renameSession.SessionName, m.renameSession.WindowIndex)
 		tmux.RunTmux("rename-window", "-t", target, newName)
 		log.Info("named task %s -> %s", target, newName)
+
+		newDisplayName := renamedDisplayName(m.renameSession, newName, multiPane)
+		if err := m.notes.Move(m.renameSession.Name, newDisplayName); err != nil {
+			log.Error("move note: %v", err)
+		}
 
 		return m, doScan(m.statesDir)
 	default:
@@ -1721,6 +1819,9 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Path  "), pathStyled))
 	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Agent "), agentStyle.Render(models.AgentLabel(s.AgentType))))
 	info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Status"), statusStyle.Render(models.StatusLabel(s.Status))))
+	if line := m.noteInfoLine(s, innerWidth); line != "" {
+		info.WriteString(line)
+	}
 
 	if s.Details.GitBranch != "" {
 		info.WriteString(fmt.Sprintf("  %s  %s\n", label.Render("Branch"), val.Render(s.Details.GitBranch)))

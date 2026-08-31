@@ -148,18 +148,26 @@ func TestLiftHandlesGreyscale(t *testing.T) {
 	}
 }
 
-// TestPairResolvesToOneHalf — Pair has to behave as a plain color.Color for
-// every lipgloss style that consumes it.
-func TestPairResolvesToOneHalf(t *testing.T) {
+// TestPairFollowsReportedBackground verifies that asynchronous terminal
+// detection can switch every adaptive token after the first frame.
+func TestPairFollowsReportedBackground(t *testing.T) {
 	p := Pair{Dark: lipgloss.Color("#1a1b26"), Light: lipgloss.Color("#d5d6db")}
-	r, g, b, a := p.RGBA()
-	if a == 0 {
-		t.Fatal("Pair resolved to a transparent color")
+	resolved := func() string {
+		r, g, b, a := p.RGBA()
+		if a == 0 {
+			t.Fatal("Pair resolved to a transparent color")
+		}
+		got, _ := colorful.MakeColor(color.RGBA64{R: uint16(r), G: uint16(g), B: uint16(b), A: uint16(a)})
+		return got.Hex()
 	}
-	dark, _ := colorful.MakeColor(lipgloss.Color("#1a1b26"))
-	light, _ := colorful.MakeColor(lipgloss.Color("#d5d6db"))
-	got, _ := colorful.MakeColor(color.RGBA64{R: uint16(r), G: uint16(g), B: uint16(b), A: uint16(a)})
-	if got.Hex() != dark.Hex() && got.Hex() != light.Hex() {
-		t.Errorf("Pair resolved to %s, which is neither half", got.Hex())
+
+	defer SetDarkBackground(true)
+	SetDarkBackground(true)
+	if got := resolved(); got != "#1a1b26" {
+		t.Fatalf("dark Pair resolved to %s", got)
+	}
+	SetDarkBackground(false)
+	if got := resolved(); got != "#d5d6db" {
+		t.Fatalf("light Pair resolved to %s", got)
 	}
 }

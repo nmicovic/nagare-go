@@ -56,5 +56,26 @@ func RunServer() error {
 		return textResult(ReplyHandler(mySession, input))
 	})
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_tickets",
+		Description: "List Nagare tickets, optionally filtered by status, project, or today's work",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListTicketsInput) (*mcp.CallToolResult, any, error) {
+		return textResult(ListTicketsHandler(input))
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_ticket",
+		Description: "Get the full context for a Nagare ticket by ID or unique ID prefix",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetTicketInput) (*mcp.CallToolResult, any, error) {
+		return textResult(GetTicketHandler(input))
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "submit_ticket",
+		Description: "Submit your assigned running ticket for human review with a result and verification summary",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input SubmitTicketInput) (*mcp.CallToolResult, any, error) {
+		return textResult(SubmitTicketHandler(mySession, input))
+	})
+
 	return server.Run(context.Background(), &mcp.StdioTransport{})
 }

@@ -7,7 +7,7 @@ import (
 )
 
 func TestToolNamesCoversEveryMCPTool(t *testing.T) {
-	want := []string{"check_messages", "list_agents", "reply", "send_message", "send_message_and_wait"}
+	want := []string{"check_messages", "get_ticket", "list_agents", "list_tickets", "reply", "send_message", "send_message_and_wait", "submit_ticket"}
 	got := ToolNames()
 	if len(got) != len(want) {
 		t.Fatalf("ToolNames() = %v, want %v", got, want)

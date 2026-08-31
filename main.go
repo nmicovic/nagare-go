@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/nemke/nagare-go/internal/board"
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/log"
@@ -18,6 +19,7 @@ import (
 	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/setup"
 	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemke/nagare-go/internal/tickets"
 )
 
 func main() {
@@ -38,8 +40,9 @@ func main() {
 		Use:   "pick",
 		Short: "Launch session picker TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startView := picker.ListView
 			for {
-				m := picker.New()
+				m := picker.NewWithView(startView)
 				p := tea.NewProgram(m)
 				result, err := p.Run()
 				if err != nil {
@@ -65,6 +68,59 @@ func main() {
 						return err
 					}
 					continue
+				case picker.ActionTicketNew:
+					store := tickets.NewStore(tickets.DefaultDir())
+					if _, err := tea.NewProgram(board.NewForm(store, nil)).Run(); err != nil {
+						return err
+					}
+					startView = picker.BoardView
+					continue
+				case picker.ActionTicketEdit:
+					store := tickets.NewStore(tickets.DefaultDir())
+					ticket, err := store.Get(pickerModel.Result().Target)
+					if err != nil {
+						return err
+					}
+					if _, err := tea.NewProgram(board.NewForm(store, &ticket)).Run(); err != nil {
+						return err
+					}
+					startView = picker.BoardView
+					continue
+				default:
+					return nil
+				}
+			}
+		},
+	}
+
+	boardCmd := &cobra.Command{
+		Use:   "board",
+		Short: "Open the cross-project ticket board",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := tickets.NewStore(tickets.DefaultDir())
+			for {
+				program := tea.NewProgram(board.New(store))
+				result, err := program.Run()
+				if err != nil {
+					return err
+				}
+				boardModel, ok := result.(board.Model)
+				if !ok {
+					return nil
+				}
+				switch action := boardModel.Result(); action.Action {
+				case board.ActionNew:
+					if _, err := tea.NewProgram(board.NewForm(store, nil)).Run(); err != nil {
+						return err
+					}
+				case board.ActionEdit:
+					ticket, err := store.Get(action.TicketID)
+					if err != nil {
+						return err
+					}
+					if _, err := tea.NewProgram(board.NewForm(store, &ticket)).Run(); err != nil {
+						return err
+					}
 				default:
 					return nil
 				}
@@ -194,7 +250,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
+	rootCmd.AddCommand(pickCmd, boardCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

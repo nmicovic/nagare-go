@@ -179,6 +179,7 @@ func TestFooterFollowsTheActiveMode(t *testing.T) {
 		{"theme picker", func(m Model) Model { m.showThemePick = true; return m }, []string{"Preview", "Cancel"}, "Navigate"},
 		{"confirm", func(m Model) Model { m.confirmMode = true; return m }, []string{"Remove worktree", "Keep it"}, "Navigate"},
 		{"prompt", func(m Model) Model { m.promptMode = true; return m }, []string{"Send", "Cancel"}, "Navigate"},
+		{"note", func(m Model) Model { m.noteMode = true; return m }, []string{"Save", "Cancel"}, "Navigate"},
 		{"rename", func(m Model) Model { m.renameMode = true; return m }, []string{"Save name", "Cancel"}, "Navigate"},
 		{"new worktree", func(m Model) Model { m.worktreeMode = true; return m }, []string{"Create worktree"}, "Navigate"},
 	}
@@ -215,7 +216,7 @@ func TestFooterModesDoNotClaimF1OrEsc(t *testing.T) {
 func TestFooterHandlesAnEmptyList(t *testing.T) {
 	m := footerModel(t, nil)
 
-	for _, key := range []string{"Enter", "^y", "^w", "^x", "F2", "F3"} {
+	for _, key := range []string{"Enter", "^y", "^w", "^x", "F2", "F3", "F5"} {
 		if hasKey(m, key) {
 			t.Errorf("empty list offers %s with nothing selected", key)
 		}
@@ -305,6 +306,7 @@ func TestHelpOverlayCoversEveryBinding(t *testing.T) {
 		keyEditConfig:    "Ctrl+e",
 		keyToggleSaved:   "Ctrl+s",
 		keyNextAttention: "F4",
+		keyNote:          "F5",
 	}
 	for binding, shown := range want {
 		if !strings.Contains(text, shown) {

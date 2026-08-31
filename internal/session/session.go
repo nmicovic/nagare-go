@@ -165,6 +165,8 @@ func agentCommand(agent, projectPath string, continueSession bool) string {
 		}
 		return "omp"
 	case "codex":
+		// Codex has no -c: resuming is its own subcommand, and --last picks the
+		// most recent thread instead of opening the session picker.
 		if continueSession {
 			return "codex resume --last"
 		}

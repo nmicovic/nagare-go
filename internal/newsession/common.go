@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"charm.land/huh/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/nemke/nagare-go/internal/theme"
 )

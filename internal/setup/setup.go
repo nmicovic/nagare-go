@@ -86,6 +86,7 @@ func Run() error {
 		fmt.Printf("  Extension: OhMyPi — skipped (%v)\n", err)
 	}
 
+
 	// Register MCP server in all supported agents
 
 	// Claude Code, Gemini CLI, and OhMyPi use standard mcpServers format.
@@ -121,6 +122,14 @@ func Run() error {
 		} else {
 			fmt.Printf("  MCP server: %s — %s\n", mc.name, mc.path)
 		}
+	}
+
+	// Codex keeps MCP servers in its TOML config, so it gets its own writer.
+	codexConfig := filepath.Join(home, ".codex", "config.toml")
+	if err := registerMCPCodex(codexConfig, nagareBin); err != nil {
+		fmt.Printf("  MCP server: Codex — skipped (%v)\n", err)
+	} else {
+		fmt.Printf("  MCP server: Codex — %s\n", codexConfig)
 	}
 
 	// Install slash commands for all supported agent CLIs

@@ -33,6 +33,24 @@ func TestAgentArtAndGradientsAgree(t *testing.T) {
 	}
 }
 
+func TestAgentArtCodex(t *testing.T) {
+	art, ok := agentArt[models.AgentCodex]
+	if !ok {
+		t.Fatal("codex has no logo")
+	}
+	for i, line := range strings.Split(art, "\n") {
+		if w := ansi.PrintableRuneWidth(line); w != 8 {
+			t.Errorf("codex logo row %d is %d cells wide, want 8", i, w)
+		}
+	}
+	if renderAgentArt(models.AgentCodex) == "" {
+		t.Error("renderAgentArt(codex) returned empty")
+	}
+	if renderAgentArtSmall(models.AgentCodex) == "" {
+		t.Error("renderAgentArtSmall(codex) returned empty")
+	}
+}
+
 func TestAgentArtPi(t *testing.T) {
 	art, ok := agentArt[models.AgentPi]
 	if !ok {

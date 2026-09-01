@@ -37,7 +37,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/config` — TOML config loading + saving
 - `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
 - `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
-- `internal/state` — state files + session registry
+- `internal/state` — state files + session registry + session notes
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
 - `internal/picker` — Bubble Tea TUI (list/grid views, overlays, keybindings, mouse)
@@ -130,11 +130,36 @@ per-agent elsewhere.
 | OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
 | pi | extension `~/.pi/agent/extensions/nagare.ts` | `nagare-go tool` bridge (pi has no MCP) |
+| Codex | hooks in `~/.codex/hooks.json` | MCP (`~/.codex/config.toml`) |
 
 pi has no MCP client by design, so its extension registers the five nagare tools and
 shells out to `nagare-go tool <name> <json>`, which calls the same handlers the MCP
 server calls. pi also has no permission prompts, so pi sessions never reach
 `waiting_input`.
+
+Codex writes command hooks with Claude Code's wire format — the same stdin JSON, the
+same `hook_event_name` spellings — so `hooks.EventToState` needed nothing new. What
+differs is everything around them, and each difference was verified against the
+binary rather than assumed:
+
+- Hooks live in their own `~/.codex/hooks.json`, not in a settings file, keyed
+  `{"hooks": {"<Event>": [{"hooks": [handler]}]}}`.
+- The per-hook timeout key is `timeout`, in seconds. Codex *reports* it back as
+  `timeoutSec` over its app-server protocol but ignores that spelling in the file,
+  with no warning — a hook written that way silently inherits the 600s default.
+- Codex has no `Notification` or `Elicitation` event, so `PermissionRequest` is the
+  only signal for a waiting prompt, and it fires once.
+- A new or changed hook is **untrusted** and does not run until the user approves it
+  in Codex's startup review (or `/hooks`). Setup says so, because hooks that look
+  installed and never fire read as a nagare bug. Do not reach for
+  `--dangerously-bypass-hook-trust` to paper over it.
+- MCP servers live in `config.toml`, so `registerMCPCodex` edits TOML as text rather
+  than round-tripping a map: that file is hand-written and holds comments and
+  `[projects."..."]` tables. Only `[mcp_servers.nagare]` and its sub-tables are
+  rewritten.
+- Codex has no user-level slash commands, so it gets the Agent Skill Crush gets, at
+  `~/.codex/skills/nagare/SKILL.md` — with the front matter Codex requires.
+- `codex` has no `-c`; continuing is `codex resume --last`, which skips the picker.
 
 Generated plugin/extension files are rewritten on every `nagare-go setup`, so edits
 belong in `internal/setup`, not in the installed files.
@@ -159,6 +184,7 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | Ctrl+x | Kill the pane's window (or the session if it is the only agent pane); offers to remove a worktree |
 | F2 | Name the selected task |
 | F3 | New git worktree for this repo |
+| F5 | Edit session note |
 | Ctrl+n | New session form |
 | Ctrl+r | Quick prototype |
 | Ctrl+l | Inline prompt |
@@ -409,6 +435,7 @@ documented, since the footer defers to this screen.
 Compatible with Python version. Same paths, same JSON schema:
 - `~/.local/share/nagare/states/*.json`
 - `~/.local/share/nagare/sessions.json`
+- `~/.local/share/nagare/notes.json` (session notes; kept out of sessions.json so Python nagare does not wipe the registry)
 - `~/.local/share/nagare/notifications.json`
 - `~/.local/share/nagare/messages/` (MCP inter-agent)
 - `~/.local/share/nagare/nagare-go.log`

@@ -251,9 +251,11 @@ func TestFrameFillsTerminalExactly(t *testing.T) {
 		{"list+helpbar", func(m Model) Model { m.showHelpBar = true; return m }},
 		{"list-no-helpbar", func(m Model) Model { m.showHelpBar = false; return m }},
 		{"grid", func(m Model) Model { m.viewMode = GridView; return m }},
+		{"board", func(m Model) Model { m.viewMode = BoardView; return m }},
 		{"help-overlay", func(m Model) Model { m.showHelp = true; return m }},
 		{"theme-overlay", func(m Model) Model { m.showThemePick = true; return m }},
 		{"prompt-overlay", func(m Model) Model { m.promptMode = true; return m }},
+		{"note-overlay", func(m Model) Model { m.noteMode = true; return m }},
 	}
 
 	for _, size := range sizes {
@@ -284,7 +286,7 @@ func TestFrameFillsTerminalExactly(t *testing.T) {
 // TestEmptySessionListStillFillsFrame covers the no-sessions branches, which
 // return their own panels and so have their own sizing arithmetic.
 func TestEmptySessionListStillFillsFrame(t *testing.T) {
-	for _, mode := range []ViewMode{ListView, GridView} {
+	for _, mode := range []ViewMode{ListView, BoardView, GridView} {
 		m := driveModel(t, NewForTest(),
 			tea.WindowSizeMsg{Width: 100, Height: 30},
 			SessionsUpdatedMsg(nil),
@@ -293,6 +295,41 @@ func TestEmptySessionListStillFillsFrame(t *testing.T) {
 		if got := len(strings.Split(m.View().Content, "\n")); got != 30 {
 			t.Errorf("viewMode %v: frame is %d rows, want 30", mode, got)
 		}
+	}
+}
+
+func TestTabCyclesListBoardGrid(t *testing.T) {
+	m := NewForTest()
+	tab := tea.KeyPressMsg{Code: tea.KeyTab}
+
+	m = driveModel(t, m, tab)
+	if m.viewMode != BoardView {
+		t.Fatalf("first Tab selected %v, want board", m.viewMode)
+	}
+	m = driveModel(t, m, tab)
+	if m.viewMode != GridView {
+		t.Fatalf("second Tab selected %v, want grid", m.viewMode)
+	}
+	m = driveModel(t, m, tab)
+	if m.viewMode != ListView {
+		t.Fatalf("third Tab selected %v, want list", m.viewMode)
+	}
+
+	shiftTab := tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	if shiftTab.String() != keyReverseView {
+		t.Fatalf("Shift+Tab string = %q, want %q", shiftTab.String(), keyReverseView)
+	}
+	m = driveModel(t, m, shiftTab)
+	if m.viewMode != GridView {
+		t.Fatalf("first Shift+Tab selected %v, want grid", m.viewMode)
+	}
+	m = driveModel(t, m, shiftTab)
+	if m.viewMode != BoardView {
+		t.Fatalf("second Shift+Tab selected %v, want board", m.viewMode)
+	}
+	m = driveModel(t, m, shiftTab)
+	if m.viewMode != ListView {
+		t.Fatalf("third Shift+Tab selected %v, want list", m.viewMode)
 	}
 }
 

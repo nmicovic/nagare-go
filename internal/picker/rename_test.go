@@ -47,4 +47,3 @@ func TestRenameWindowNameStripsDisplayPrefix(t *testing.T) {
 		})
 	}
 }
-

@@ -1110,7 +1110,7 @@ func (m Model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		tmux.RunTmux("rename-window", "-t", target, newName)
 		log.Info("named task %s -> %s", target, newName)
 
-		newDisplayName := renamedDisplayName(m.renameSession, newName, multiPane)
+		newDisplayName := m.renameSession.SessionName + "/" + newName
 		if err := m.notes.Move(m.renameSession.Name, newDisplayName); err != nil {
 			log.Error("move note: %v", err)
 		}

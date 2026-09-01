@@ -180,6 +180,29 @@ func installCrushSkill(home string) {
 	fmt.Printf("  Skill: Crush — %s\n", dir)
 }
 
+// installCodexSkill writes the nagare messaging skill to
+// ~/.codex/skills/nagare/SKILL.md. Codex discovers skills there for every
+// project; unlike Claude Code and OpenCode it has no user-level slash commands
+// to install, so it gets a skill, as Crush does.
+func installCodexSkill(home string) {
+	dir := filepath.Join(home, ".codex", "skills", "nagare")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Printf("  Skill: Codex — skipped (%v)\n", err)
+		return
+	}
+	// Codex requires front matter naming the skill; the name must match the
+	// directory, and the description is what it matches a request against.
+	skill := "---\nname: nagare\ndescription: " +
+		"Communicate with other AI agent sessions — list them, send messages, and check the inbox.\n" +
+		"---\n\n" + nagareSkillBody
+	path := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(path, []byte(skill), 0644); err != nil {
+		fmt.Printf("  Skill: Codex — skipped (%v)\n", err)
+		return
+	}
+	fmt.Printf("  Skill: Codex — %s\n", dir)
+}
+
 func writeCommandFiles(t commandTarget) error {
 	if err := os.MkdirAll(t.dir, 0755); err != nil {
 		return err

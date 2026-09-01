@@ -34,22 +34,66 @@ const (
 )
 
 // Ticket is a durable desired outcome. Assignment fields identify the current
-// execution attempt; they do not determine Status by themselves.
+// execution attempt; submission fields snapshot its handoff for later reports.
 type Ticket struct {
-	ID               string     `json:"id"`
-	Title            string     `json:"title"`
-	Description      string     `json:"description,omitempty"`
-	ProjectPath      string     `json:"project_path,omitempty"`
-	Status           Status     `json:"status"`
-	Priority         Priority   `json:"priority"`
-	PlannedFor       string     `json:"planned_for,omitempty"`
-	AssigneeSession  string     `json:"assignee_session,omitempty"`
-	AssigneePaneID   string     `json:"assignee_pane_id,omitempty"`
-	AssigneeAgent    string     `json:"assignee_agent,omitempty"`
-	SubmittedSummary string     `json:"submitted_summary,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	ID                 string     `json:"id"`
+	Title              string     `json:"title"`
+	Description        string     `json:"description,omitempty"`
+	ProjectPath        string     `json:"project_path,omitempty"`
+	Status             Status     `json:"status"`
+	Priority           Priority   `json:"priority"`
+	PlannedFor         string     `json:"planned_for,omitempty"`
+	AssigneeSession    string     `json:"assignee_session,omitempty"`
+	AssigneePaneID     string     `json:"assignee_pane_id,omitempty"`
+	AssigneeAgent      string     `json:"assignee_agent,omitempty"`
+	SubmittedSummary   string     `json:"submitted_summary,omitempty"`
+	SubmittedBySession string     `json:"submitted_by_session,omitempty"`
+	SubmittedByAgent   string     `json:"submitted_by_agent,omitempty"`
+	SubmittedRepoPath  string     `json:"submitted_repo_path,omitempty"`
+	SubmittedAt        *time.Time `json:"submitted_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+}
+
+// RecordSubmission snapshots the completed execution attempt for review and
+// reporting. Assignment fields remain available for live board navigation.
+func (t *Ticket) RecordSubmission(summary string, submittedAt time.Time) {
+	at := submittedAt.UTC()
+	t.SubmittedSummary = strings.TrimSpace(summary)
+	t.SubmittedBySession = t.AssigneeSession
+	t.SubmittedByAgent = t.AssigneeAgent
+	t.SubmittedRepoPath = t.ProjectPath
+	t.SubmittedAt = &at
+}
+
+// ClearSubmission removes a previous execution attempt's report before the
+// ticket is assigned again.
+func (t *Ticket) ClearSubmission() {
+	t.SubmittedSummary = ""
+	t.SubmittedBySession = ""
+	t.SubmittedByAgent = ""
+	t.SubmittedRepoPath = ""
+	t.SubmittedAt = nil
+}
+
+func (t *Ticket) hydrateSubmission() {
+	if t.SubmittedSummary == "" {
+		return
+	}
+	if t.SubmittedBySession == "" {
+		t.SubmittedBySession = t.AssigneeSession
+	}
+	if t.SubmittedByAgent == "" {
+		t.SubmittedByAgent = t.AssigneeAgent
+	}
+	if t.SubmittedRepoPath == "" {
+		t.SubmittedRepoPath = t.ProjectPath
+	}
+	if t.SubmittedAt == nil && !t.UpdatedAt.IsZero() {
+		at := t.UpdatedAt.UTC()
+		t.SubmittedAt = &at
+	}
 }
 
 // CreateInput contains user-controlled fields for a new ticket.

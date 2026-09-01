@@ -17,7 +17,7 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)
 - **Inter-Agent Messaging** — MCP server lets agents discover, message, and coordinate with each other (pi has no MCP client, so it gets the same tools through a CLI bridge; OhMyPi uses native MCP)
-- **Ticket Board** — a local cross-project kanban for today's work, with durable tickets, agent delegation, and human review
+- **Ticket Board** — a local cross-project kanban for today's work, with durable tickets, agent delegation, human review, and submission records capturing the result, agent, session, repository, and time for reporting
 - **6 Themes** — tokyonight, catppuccin, dracula, gruvbox, monokai, nord
 - **3ms Startup** — compiled Go binary, no runtime dependencies
 

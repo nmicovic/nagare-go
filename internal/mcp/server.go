@@ -72,7 +72,7 @@ func RunServer() error {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "submit_ticket",
-		Description: "Submit your assigned running ticket for human review with a result and verification summary",
+		Description: "Submit an assigned running ticket for human review. The summary must describe the completed work and verification; Nagare records the agent, session, repository, and submission time.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SubmitTicketInput) (*mcp.CallToolResult, any, error) {
 		return textResult(SubmitTicketHandler(mySession, input))
 	})

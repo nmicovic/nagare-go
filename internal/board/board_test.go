@@ -78,7 +78,7 @@ func TestMoveSelectedPersistsWorkflowTransition(t *testing.T) {
 func TestAssignmentPromptCarriesTicketContract(t *testing.T) {
 	ticket := tickets.Ticket{ID: "ticket-123", Title: "Build board", Description: "Keep tickets durable."}
 	prompt := assignmentPrompt(ticket)
-	for _, want := range []string{"ticket-123", "Build board", "Keep tickets durable.", "submit_ticket", "human review"} {
+	for _, want := range []string{"ticket-123", "Build board", "Keep tickets durable.", "submit_ticket", "what changed", "repository", "human review"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("assignment prompt missing %q: %s", want, prompt)
 		}

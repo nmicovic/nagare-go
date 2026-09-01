@@ -516,7 +516,7 @@ func assignTicket(store *tickets.Store, ticket tickets.Ticket, target models.Ses
 		current.AssigneeSession = target.Name
 		current.AssigneePaneID = target.PaneID
 		current.AssigneeAgent = string(target.AgentType)
-		current.SubmittedSummary = ""
+		current.ClearSubmission()
 		return nil
 	})
 	if err != nil {
@@ -542,7 +542,7 @@ func assignmentPrompt(ticket tickets.Ticket) string {
 	if ticket.Description != "" {
 		description = "\n\nDescription and acceptance criteria:\n" + ticket.Description
 	}
-	return fmt.Sprintf("You have been assigned Nagare ticket %s: %s%s\n\nWork in the current project. When the requested outcome is implemented and verified, call submit_ticket with ticket_id %q and a concise summary of the result and verification. Do not mark the ticket done; it requires human review.", ticket.ID, ticket.Title, description, ticket.ID)
+	return fmt.Sprintf("You have been assigned Nagare ticket %s: %s%s\n\nWork in the current project. When the requested outcome is implemented and verified, call submit_ticket with ticket_id %q. The summary must explain what changed and how it was verified; Nagare records your agent, session, repository, and submission time automatically. Do not mark the ticket done; it requires human review.", ticket.ID, ticket.Title, description, ticket.ID)
 }
 
 func statusIndex(status tickets.Status) int {

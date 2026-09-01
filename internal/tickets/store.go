@@ -86,6 +86,7 @@ func (s *Store) List() ([]Ticket, error) {
 		if err := json.Unmarshal(data, &ticket); err != nil {
 			return nil, fmt.Errorf("decode ticket %s: %w", entry.Name(), err)
 		}
+		ticket.hydrateSubmission()
 		if err := ticket.Validate(); err != nil {
 			return nil, fmt.Errorf("validate ticket %s: %w", entry.Name(), err)
 		}
@@ -116,6 +117,7 @@ func (s *Store) Get(id string) (Ticket, error) {
 	if err := json.Unmarshal(data, &ticket); err != nil {
 		return Ticket{}, fmt.Errorf("decode ticket %s: %w", id, err)
 	}
+	ticket.hydrateSubmission()
 	if err := ticket.Validate(); err != nil {
 		return Ticket{}, err
 	}

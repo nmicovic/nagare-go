@@ -223,7 +223,6 @@ func (m Form) save() error {
 			ticket.AssigneeSession = ""
 			ticket.AssigneePaneID = ""
 			ticket.AssigneeAgent = ""
-			ticket.SubmittedSummary = ""
 		}
 		return nil
 	})

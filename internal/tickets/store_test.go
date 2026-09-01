@@ -121,3 +121,62 @@ func TestSetStatusMaintainsCompletionTime(t *testing.T) {
 		t.Fatal("SetStatus(review) retained completion time")
 	}
 }
+
+func TestSubmissionSnapshotsAssignmentAndCanReset(t *testing.T) {
+	at := time.Now()
+	ticket := Ticket{
+		ProjectPath:     "/projects/nagare",
+		AssigneeSession: "workbench",
+		AssigneeAgent:   "omp",
+	}
+	ticket.RecordSubmission("  Implemented reporting metadata.  ", at)
+
+	if ticket.SubmittedSummary != "Implemented reporting metadata." ||
+		ticket.SubmittedBySession != "workbench" ||
+		ticket.SubmittedByAgent != "omp" ||
+		ticket.SubmittedRepoPath != "/projects/nagare" {
+		t.Fatalf("submission snapshot = %#v", ticket)
+	}
+	if ticket.SubmittedAt == nil || !ticket.SubmittedAt.Equal(at.UTC()) {
+		t.Fatalf("submitted at = %v, want %v", ticket.SubmittedAt, at.UTC())
+	}
+
+	ticket.ClearSubmission()
+	if ticket.SubmittedSummary != "" || ticket.SubmittedBySession != "" ||
+		ticket.SubmittedByAgent != "" || ticket.SubmittedRepoPath != "" ||
+		ticket.SubmittedAt != nil {
+		t.Fatalf("ClearSubmission() retained metadata: %#v", ticket)
+	}
+}
+
+func TestStoreHydratesLegacySubmissionMetadata(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ticket, err := store.Create(CreateInput{
+		Title:       "Existing submission",
+		ProjectPath: "/projects/nagare",
+		Status:      StatusReview,
+		Priority:    PriorityMedium,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(ticket.ID, func(current *Ticket) error {
+		current.AssigneeSession = "workbench"
+		current.AssigneeAgent = "omp"
+		current.SubmittedSummary = "Legacy result"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Get(ticket.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.SubmittedBySession != "workbench" ||
+		loaded.SubmittedByAgent != "omp" ||
+		loaded.SubmittedRepoPath != "/projects/nagare" ||
+		loaded.SubmittedAt == nil {
+		t.Fatalf("legacy submission was not hydrated: %#v", loaded)
+	}
+}

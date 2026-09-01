@@ -139,7 +139,7 @@ You have access to the nagare MCP server for communicating with other AI agent s
 - **reply(message_id, content)** — Reply to a pending message
 - **list_tickets(status, project_path, today)** — List work tracked on the Nagare board
 - **get_ticket(ticket_id)** — Read a ticket's full context and acceptance criteria
-- **submit_ticket(ticket_id, summary)** — Hand your assigned work back for human review
+- **submit_ticket(ticket_id, summary)** — Hand assigned work back for human review; summary must explain what changed and how it was verified
 
 ## Workflows
 
@@ -161,7 +161,7 @@ Call check_messages() — reply to pending messages with reply(message_id, conte
 ### Complete an assigned ticket
 1. Call get_ticket(ticket_id) if the assignment prompt does not contain enough context.
 2. Implement and verify the requested outcome.
-3. Call submit_ticket(ticket_id, summary) with the result and verification.
+3. Call submit_ticket(ticket_id, summary) with what changed and how it was verified. Nagare records your agent, session, repository, and submission time automatically.
 4. Do not mark the ticket done; Done means human-reviewed.
 `
 

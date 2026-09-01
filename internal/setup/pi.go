@@ -101,7 +101,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       status: Type.Optional(Type.String({ description: "workflow status" })),
       project_path: Type.Optional(Type.String({ description: "exact project path" })),
-      today: Type.Optional(Type.Boolean({ description: "only today's and active work" })),
+      today: Type.Optional(Type.Boolean({ description: "tickets planned, submitted, or completed today plus active work" })),
     }),
     async execute(_id, params, signal) {
       return callTool(pi, "list_tickets", params, signal);
@@ -124,11 +124,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "submit_ticket",
     label: "Nagare: submit ticket",
-    description: "Submit your assigned running ticket for human review",
-    promptSnippet: "Hand completed and verified ticket work back for human review",
+    description: "Submit an assigned running ticket for human review with durable reporting context",
+    promptSnippet: "Describe completed and verified ticket work for human review",
     parameters: Type.Object({
       ticket_id: Type.String({ description: "assigned ticket ID or unique prefix" }),
-      summary: Type.String({ description: "implementation and verification summary" }),
+      summary: Type.String({ description: "what changed and how the result was verified" }),
     }),
     async execute(_id, params, signal) {
       return callTool(pi, "submit_ticket", params, signal);

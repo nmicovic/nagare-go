@@ -190,6 +190,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.column < len(tickets.BoardStatuses)-1 {
 			m.column++
 		}
+	case "1", "2", "3", "4", "5":
+		column := int(key[0] - '1')
+		if column < len(tickets.BoardStatuses) {
+			m.column = column
+		}
 	case "up", "k":
 		status := m.currentStatus()
 		if m.cursors[status] > 0 {
@@ -644,6 +649,7 @@ func (m Model) renderFooter() string {
 	hints := []string{
 		key("Tab/⇧Tab", "views"),
 		key("h/l", "lane"),
+		key("1-5", "jump"),
 		key("j/k", "card"),
 		key("[/]", "move"),
 		key("n", "new"),
@@ -688,7 +694,7 @@ func (m Model) renderColumn(index, width, height int) string {
 	laneBackground := colors.Surface
 	laneFill := lipgloss.NewStyle().Background(laneBackground)
 	statusStyle := lipgloss.NewStyle().Foreground(statusColor(status)).Background(laneBackground).Bold(true)
-	title := statusStyle.Render(statusIcon(status) + " " + tickets.StatusLabel(status))
+	title := statusStyle.Render(fmt.Sprintf("%d  %s %s", index+1, statusIcon(status), tickets.StatusLabel(status)))
 	countStyle := lipgloss.NewStyle().Foreground(colors.Muted).Background(colors.Overlay).Padding(0, 1)
 	if focused {
 		countStyle = countStyle.Foreground(colors.Background).Background(statusColor(status)).Bold(true)

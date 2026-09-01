@@ -84,6 +84,7 @@ nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 | Key | Action |
 |-----|--------|
 | `h/l` or arrows | Move between columns |
+| `1`–`5` | Jump directly to Backlog, Ready, Running, Review, or Done |
 | `j/k` or arrows | Select a ticket |
 | `[` / `]` | Move ticket left / right |
 | `n` | Create ticket |

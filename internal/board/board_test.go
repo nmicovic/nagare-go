@@ -43,6 +43,26 @@ func TestTodayBoardIncludesPlannedAndActiveWork(t *testing.T) {
 	}
 }
 
+func TestNumberKeysJumpToLanes(t *testing.T) {
+	model := Model{column: len(tickets.BoardStatuses) - 1}
+	for index, status := range tickets.BoardStatuses {
+		key := rune('1' + index)
+		next, _ := model.Update(tea.KeyPressMsg{Code: key, Text: string(key)})
+		model = next.(Model)
+		if model.column != index {
+			t.Errorf("key %q selected column %d, want %d", key, model.column, index)
+		}
+		if model.currentStatus() != status {
+			t.Errorf("key %q selected status %q, want %q", key, model.currentStatus(), status)
+		}
+	}
+
+	footer := ansi.Strip(Model{width: 200}.renderFooter())
+	if !strings.Contains(footer, "1-5 jump") {
+		t.Errorf("footer does not advertise numbered lane jumps: %q", footer)
+	}
+}
+
 func TestMoveSelectedPersistsWorkflowTransition(t *testing.T) {
 	store := tickets.NewStore(t.TempDir())
 	ticket, err := store.Create(tickets.CreateInput{

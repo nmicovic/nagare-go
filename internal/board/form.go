@@ -3,8 +3,7 @@ package board
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
-	"sort"
+	"os"
 	"strings"
 	"time"
 
@@ -12,7 +11,8 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/git"
+	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tickets"
 )
@@ -20,11 +20,12 @@ import (
 var errTitleRequired = errors.New("title is required")
 
 type formState struct {
-	title       string
-	description string
-	assignee    string
-	priority    string
-	today       bool
+	title        string
+	description  string
+	projectPath  string
+	targetBranch string
+	priority     string
+	today        bool
 }
 
 // Form is the create/edit ticket form launched from the board.
@@ -32,7 +33,6 @@ type Form struct {
 	form     *huh.Form
 	state    *formState
 	store    *tickets.Store
-	agents   map[string]models.Session
 	ticketID string
 	width    int
 	height   int
@@ -41,23 +41,34 @@ type Form struct {
 }
 
 // NewForm creates a ticket form. A nil ticket creates a new ticket; otherwise
-// the form updates the supplied ticket and its optional agent assignment.
+// the form updates the supplied ticket.
 func NewForm(store *tickets.Store, ticket *tickets.Ticket) Form {
 	state := &formState{
-		priority: string(tickets.PriorityMedium),
-		today:    true,
+		priority:     string(tickets.PriorityMedium),
+		today:        true,
+		targetBranch: "main",
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if root := git.MainRoot(cwd); root != "" {
+			state.projectPath = root
+			if branch := git.DefaultBranch(root); branch != "" {
+				state.targetBranch = branch
+			}
+		}
 	}
 	ticketID := ""
 	if ticket != nil {
 		ticketID = ticket.ID
 		state.title = ticket.Title
 		state.description = ticket.Description
-		state.assignee = ticket.AssigneeSession
+		state.projectPath = ticket.ProjectPath
+		state.targetBranch = ticket.TargetBranch
+		if state.targetBranch == "" {
+			state.targetBranch = "main"
+		}
 		state.priority = string(ticket.Priority)
 		state.today = ticket.PlannedFor == time.Now().Format(time.DateOnly)
 	}
-
-	agents, agentOptions := ticketAgentOptions(state.assignee)
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -75,11 +86,16 @@ func NewForm(store *tickets.Store, ticket *tickets.Ticket) Form {
 				Description("Context and acceptance criteria sent to the agent").
 				CharLimit(4000).
 				Value(&state.description),
-			huh.NewSelect[string]().
-				Title("Assign to agent").
-				Description("Start immediately with an idle agent, or leave unassigned").
-				Options(agentOptions...).
-				Value(&state.assignee),
+			huh.NewInput().
+				Title("Repository path").
+				Description("Git repository used for isolated ticket worktrees").
+				Placeholder("~/Projects/my-project").
+				Value(&state.projectPath),
+			huh.NewInput().
+				Title("Target branch").
+				Description("New attempts start from this branch without changing the source checkout").
+				Placeholder("main").
+				Value(&state.targetBranch),
 			huh.NewSelect[string]().
 				Title("Priority").
 				Options(huh.NewOptions("urgent", "high", "medium", "low")...).
@@ -92,30 +108,7 @@ func NewForm(store *tickets.Store, ticket *tickets.Ticket) Form {
 		),
 	).WithTheme(theme.FormTheme{}).WithShowHelp(true)
 
-	return Form{form: form, state: state, store: store, agents: agents, ticketID: ticketID}
-}
-
-func ticketAgentOptions(current string) (map[string]models.Session, []huh.Option[string]) {
-	sessions := scanAgentSessions()
-	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].Name < sessions[j].Name })
-
-	agents := make(map[string]models.Session)
-	options := []huh.Option[string]{huh.NewOption("Unassigned", "")}
-	for _, candidate := range sessions {
-		if candidate.Status != models.StatusIdle && candidate.Name != current {
-			continue
-		}
-		agents[candidate.Name] = candidate
-		project := filepath.Base(candidate.Path)
-		label := fmt.Sprintf("%s · %s · %s", candidate.Name, models.AgentLabel(candidate.AgentType), project)
-		options = append(options, huh.NewOption(label, candidate.Name))
-	}
-	if current != "" {
-		if _, found := agents[current]; !found {
-			options = append(options, huh.NewOption(current+" · unavailable", current))
-		}
-	}
-	return agents, options
+	return Form{form: form, state: state, store: store, ticketID: ticketID}
 }
 
 func (m Form) Init() tea.Cmd {
@@ -187,54 +180,64 @@ func (m Form) save() error {
 		plannedFor = time.Now().Format(time.DateOnly)
 		status = tickets.StatusReady
 	}
-	if m.ticketID == "" {
-		ticket, err := m.store.Create(tickets.CreateInput{
-			Title:       m.state.title,
-			Description: m.state.description,
-			Status:      status,
-			Priority:    tickets.Priority(m.state.priority),
-			PlannedFor:  plannedFor,
-		})
-		if err != nil || m.state.assignee == "" {
+
+	projectPath := strings.TrimSpace(m.state.projectPath)
+	targetBranch := strings.TrimSpace(m.state.targetBranch)
+	if projectPath != "" {
+		projectPath = session.ExpandPath(projectPath)
+		root := git.MainRoot(projectPath)
+		if root == "" {
+			return fmt.Errorf("%s is not a git repository", projectPath)
+		}
+		projectPath = root
+		if targetBranch == "" {
+			targetBranch = git.DefaultBranch(root)
+		}
+		if targetBranch == "" {
+			return fmt.Errorf("target branch is required")
+		}
+		if _, err := git.ResolveBaseCommit(root, targetBranch); err != nil {
 			return err
 		}
-		target, ok := m.agents[m.state.assignee]
-		if !ok {
-			return fmt.Errorf("agent %q is no longer available", m.state.assignee)
-		}
-		return assignTicket(m.store, ticket, target)
+	} else {
+		targetBranch = ""
+	}
+
+	if m.ticketID == "" {
+		_, err := m.store.Create(tickets.CreateInput{
+			Title:        m.state.title,
+			Description:  m.state.description,
+			ProjectPath:  projectPath,
+			TargetBranch: targetBranch,
+			Status:       status,
+			Priority:     tickets.Priority(m.state.priority),
+			PlannedFor:   plannedFor,
+		})
+		return err
 	}
 
 	before, err := m.store.Get(m.ticketID)
 	if err != nil {
 		return err
 	}
-	updated, err := m.store.Update(m.ticketID, func(ticket *tickets.Ticket) error {
+	if (before.Status == tickets.StatusRunning || before.Status == tickets.StatusReview) &&
+		(before.ProjectPath != projectPath || before.TargetBranch != targetBranch) {
+		return fmt.Errorf("cannot retarget an active ticket")
+	}
+	_, err = m.store.Update(m.ticketID, func(ticket *tickets.Ticket) error {
 		ticket.Title = m.state.title
 		ticket.Description = m.state.description
+		ticket.ProjectPath = projectPath
+		ticket.TargetBranch = targetBranch
 		ticket.Priority = tickets.Priority(m.state.priority)
 		ticket.PlannedFor = plannedFor
 		if ticket.Status == tickets.StatusBacklog || ticket.Status == tickets.StatusReady {
 			ticket.Status = status
-		}
-		if m.state.assignee == "" && ticket.AssigneeSession != "" {
-			ticket.Status = status
-			ticket.ProjectPath = ""
-			ticket.AssigneeSession = ""
-			ticket.AssigneePaneID = ""
-			ticket.AssigneeAgent = ""
 		}
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("save ticket: %w", err)
 	}
-	if m.state.assignee == "" || m.state.assignee == before.AssigneeSession {
-		return nil
-	}
-	target, ok := m.agents[m.state.assignee]
-	if !ok {
-		return fmt.Errorf("agent %q is no longer available", m.state.assignee)
-	}
-	return assignTicket(m.store, updated, target)
+	return nil
 }

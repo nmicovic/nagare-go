@@ -36,7 +36,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
 - `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
-- `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
+- `internal/git` — resolves repository/worktree identity, reviews managed diffs, and pushes only an explicitly recorded clean branch
 - `internal/state` — state files + session registry + session notes
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
@@ -45,6 +45,8 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/popup` — popup notification TUI
 - `internal/session` — session creation + path resolution
 - `internal/newsession` — new session + quick prototype forms
+- `internal/attempts` — durable execution attempts (base SHA, branch, managed worktree, pane, lifecycle)
+- `internal/orchestrator` — ticket worktree provisioning, delivery, reconciliation, diff review, idempotent GitHub PR creation, and conservative archive
 - `internal/theme` — 13 themes on a derived design-token layer (see Themes), self-registering via init()
 - `internal/setup` — status reporting + MCP + slash command installation for every agent
 - `internal/mcp` — MCP server for inter-agent messaging, plus the CLI tool bridge
@@ -113,6 +115,32 @@ agent child, keeping the tree and agent sigils aligned across the list. One blan
 separates project blocks. A group takes the position of its most urgent member, so a
 waiting worktree lifts its whole repo. Rows are derived per frame by
 `picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
+
+### Ticket orchestration
+
+`d` on a backlog or ready ticket selects an agent and starts one durable attempt.
+The ticket must name a repository and target branch. Nagare resolves the target to
+an immutable commit without switching the source checkout, creates
+`nagare/<ticket>-<attempt>` under
+`~/.local/share/nagare/workspaces/<attempt>/<repo>`, and starts every agent —
+including Claude Code — inside that Nagare-created worktree.
+
+Attempt records live independently under `~/.local/share/nagare/attempts/`.
+They retain the base commit, branch, worktree, agent, session, pane, errors, and
+submission time so retries do not overwrite provenance. Ticket and attempt file
+updates use cross-process record locks because the board and an agent MCP server
+can update the same record concurrently.
+
+Provisioning never checks out or modifies the target branch. A failure after Git
+creation deliberately leaves the branch and worktree intact. Reconciliation may
+mark a missing running worktree failed and make its ticket retryable, but never
+deletes anything.
+
+`c` archives only a done, submitted attempt after its agent pane has closed.
+Archive verifies the path is below Nagare's managed root, verifies the repository,
+and calls the existing non-force dirty-guarded removal. The attempt branch and its
+commits are always retained. A ticket with an active managed attempt cannot be
+deleted.
 
 ## Agent Integrations
 
@@ -437,6 +465,9 @@ Compatible with Python version. Same paths, same JSON schema:
 - `~/.local/share/nagare/sessions.json`
 - `~/.local/share/nagare/notes.json` (session notes; kept out of sessions.json so Python nagare does not wipe the registry)
 - `~/.local/share/nagare/notifications.json`
+- `~/.local/share/nagare/tickets/*.json`
+- `~/.local/share/nagare/attempts/*.json`
+- `~/.local/share/nagare/workspaces/<attempt>/<repo>/` (managed linked worktrees, not state files)
 - `~/.local/share/nagare/messages/` (MCP inter-agent)
 - `~/.local/share/nagare/nagare-go.log`
 - `~/.config/nagare/config.toml`

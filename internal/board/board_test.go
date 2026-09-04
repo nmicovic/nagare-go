@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nemke/nagare-go/internal/attempts"
+	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/orchestrator"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tickets"
 )
@@ -114,7 +117,6 @@ func TestNewTicketCanRemainUnassignedWithoutProject(t *testing.T) {
 			priority: string(tickets.PriorityMedium),
 			today:    true,
 		},
-		agents: map[string]models.Session{},
 	}
 	if err := form.save(); err != nil {
 		t.Fatal(err)
@@ -150,6 +152,52 @@ func TestAvailableAgentsOnlyIncludesIdleSessions(t *testing.T) {
 	}
 }
 
+func TestRunOpensAgentPickerForRepositoryTicket(t *testing.T) {
+	model := Model{
+		tickets: []tickets.Ticket{{
+			ID:          "ticket",
+			Title:       "Isolated work",
+			ProjectPath: "/repo",
+			Status:      tickets.StatusReady,
+			Priority:    tickets.PriorityMedium,
+		}},
+		column:  statusIndex(tickets.StatusReady),
+		cursors: map[tickets.Status]int{tickets.StatusReady: 0},
+	}
+	next, cmd := model.handleKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	updated := next.(Model)
+	if cmd != nil {
+		t.Fatal("opening run picker returned a command")
+	}
+	if !updated.runMode || len(updated.runAgents) != 7 {
+		t.Fatalf("run picker = %#v", updated)
+	}
+	if updated.runAgents[0] != models.AgentClaude || updated.runAgents[1] != models.AgentCodex {
+		t.Fatalf("agent order = %#v", updated.runAgents)
+	}
+}
+
+func TestManagedTicketMustBeArchivedBeforeDeletion(t *testing.T) {
+	model := Model{
+		tickets: []tickets.Ticket{{
+			ID: "ticket", Title: "Protected", ActiveAttemptID: "attempt",
+			Status: tickets.StatusDone, Priority: tickets.PriorityMedium,
+		}},
+		column:  statusIndex(tickets.StatusDone),
+		cursors: map[tickets.Status]int{tickets.StatusDone: 0},
+	}
+	model.startDelete()
+	if model.deleteMode {
+		t.Fatal("managed ticket entered delete mode")
+	}
+	if !strings.Contains(model.statusErr, "archive") {
+		t.Fatalf("status error = %q", model.statusErr)
+	}
+	model.startArchive()
+	if !model.archiveMode || model.archiveTicket.ID != "ticket" {
+		t.Fatalf("archive mode = %#v", model)
+	}
+}
 func TestSelectedCardHasCompleteFocusFrameAndMetadata(t *testing.T) {
 	model := Model{}
 	card := model.renderCard(tickets.Ticket{
@@ -368,4 +416,207 @@ func TestBoardPlanesStaySolidAcrossThemes(t *testing.T) {
 func backgroundSequence(c color.Color) string {
 	r, g, b, _ := c.RGBA()
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+}
+
+func TestReviewOverlayFormatsAndScrollsSubmittedDiff(t *testing.T) {
+	ticket := tickets.Ticket{
+		ID: "ticket", Title: "Review this change", Status: tickets.StatusReview,
+		ActiveAttemptID: "attempt", Priority: tickets.PriorityMedium,
+	}
+	review := orchestrator.Review{
+		Attempt: attempts.Attempt{
+			ID: "attempt", Branch: "nagare/review", TargetBranch: "main", BaseCommit: "abc123",
+		},
+		Git: git.Review{
+			Commits: 1, Stat: " file.txt | 2 +-", Diff: "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\ncontext",
+		},
+	}
+	model := Model{
+		tickets:   []tickets.Ticket{ticket},
+		column:    statusIndex(tickets.StatusReview),
+		cursors:   map[tickets.Status]int{},
+		todayOnly: false,
+		width:     90,
+		height:    18,
+	}
+	started, cmd := model.startReview()
+	model = started.(Model)
+	if !model.reviewMode || !model.reviewLoading || cmd == nil {
+		t.Fatalf("review did not start: %#v, cmd=%v", model, cmd)
+	}
+	updated, _ := model.Update(reviewMsg{review: review})
+	model = updated.(Model)
+	if model.reviewLoading || len(model.reviewLines) == 0 {
+		t.Fatalf("review did not load: %#v", model)
+	}
+	rendered := ansi.Strip(model.renderReviewDialog())
+	for _, want := range []string{"Submitted diff", "nagare/review", "abc123"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("review overlay missing %q:\n%s", want, rendered)
+		}
+	}
+	formatted := strings.Join(model.reviewLines, "\n")
+	for _, want := range []string{"STAT", "DIFF", "+new"} {
+		if !strings.Contains(formatted, want) {
+			t.Errorf("formatted review missing %q:\n%s", want, formatted)
+		}
+	}
+	previous := model.reviewOffset
+	scrolled, _ := model.handleReviewKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	model = scrolled.(Model)
+	if model.reviewOffset <= previous {
+		t.Fatalf("page down did not scroll: %d -> %d", previous, model.reviewOffset)
+	}
+}
+
+func TestPullRequestRequiresReviewAndConfirmation(t *testing.T) {
+	reviewTicket := tickets.Ticket{
+		ID: "ticket", Title: "Create PR", Status: tickets.StatusReview,
+		ActiveAttemptID: "attempt", TargetBranch: "origin/main", Priority: tickets.PriorityHigh,
+	}
+	model := Model{
+		tickets:   []tickets.Ticket{reviewTicket},
+		column:    statusIndex(tickets.StatusReview),
+		cursors:   map[tickets.Status]int{},
+		todayOnly: false,
+		width:     90,
+		height:    24,
+	}
+	model.startPullRequest()
+	if !model.prMode || model.prTicket.ID != reviewTicket.ID {
+		t.Fatalf("PR confirmation did not open: %#v", model)
+	}
+	dialog := ansi.Strip(model.renderPullRequestDialog())
+	for _, want := range []string{"Push branch", "origin/main", "non-force", "y/enter create PR"} {
+		if !strings.Contains(dialog, want) {
+			t.Errorf("PR dialog missing %q:\n%s", want, dialog)
+		}
+	}
+	canceled, cmd := model.handlePullRequestKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = canceled.(Model)
+	if model.prMode || cmd != nil {
+		t.Fatalf("PR cancellation = %#v, cmd=%v", model, cmd)
+	}
+
+	model.tickets[0].Status = tickets.StatusReady
+	model.column = statusIndex(tickets.StatusReady)
+	model.startPullRequest()
+	if model.prMode || !strings.Contains(model.statusErr, "only review") {
+		t.Fatalf("non-review PR action = %#v", model)
+	}
+}
+
+func TestCardShowsPersistedPullRequestNumber(t *testing.T) {
+	card := ansi.Strip((Model{}).renderCard(tickets.Ticket{
+		ID: "12345678-abcd", Title: "PR ready", ProjectPath: "/tmp/app",
+		Priority: tickets.PriorityMedium, PullRequestNumber: 42,
+	}, 48, true))
+	if !strings.Contains(card, "PR #42") {
+		t.Fatalf("card missing PR number:\n%s", card)
+	}
+}
+
+func plainGuide(rendered string) string {
+	plain := ansi.Strip(rendered)
+	plain = strings.Map(func(char rune) rune {
+		if char >= '\u2500' && char <= '\u257f' {
+			return ' '
+		}
+		return char
+	}, plain)
+	return strings.Join(strings.Fields(plain), " ")
+}
+func guideCopy(page int) string {
+	content := []string{boardGuidePages[page].title, boardGuidePages[page].lead}
+	for _, line := range boardGuidePages[page].lines {
+		content = append(content, strings.ReplaceAll(line.text, "\n", ""))
+	}
+	return strings.Join(content, " ")
+}
+
+func TestBoardGuideExplainsWorkflowAndManagedWorktreeLocation(t *testing.T) {
+	model := Model{
+		cursors:   map[tickets.Status]int{},
+		todayOnly: false,
+		width:     100,
+		height:    30,
+	}
+	opened, cmd := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	model = opened.(Model)
+	if !model.guideMode || model.guidePage != 0 || cmd != nil {
+		t.Fatalf("guide open = %#v, cmd=%v", model, cmd)
+	}
+	first := plainGuide(model.renderGuideDialog())
+	for _, want := range []string{"NAGARE / BOARD GUIDE", "BACKLOG", "READY", "RUNNING", "REVIEW", "DONE", "Start with the outcome"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("guide first page missing %q:\n%s", want, first)
+		}
+	}
+
+	second, _ := model.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	model = second.(Model)
+	isolation := guideCopy(1)
+	for _, want := range []string{
+		"Run without touching your checkout",
+		"nagare/<ticket>-<attempt>",
+		"~/.local/share/nagare/workspaces/",
+		"<attempt-id>/<repo>/",
+		"original checkout stays",
+	} {
+		if !strings.Contains(isolation, want) {
+			t.Errorf("guide isolation page missing %q:\n%s", want, isolation)
+		}
+	}
+
+	third, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model = third.(Model)
+	review := guideCopy(2)
+	for _, want := range []string{"Inspect before you publish", "Dirty worktrees cannot create a PR.", "authenticated gh CLI"} {
+		if !strings.Contains(review, want) {
+			t.Errorf("guide review page missing %q:\n%s", want, review)
+		}
+	}
+
+	fourth, _ := model.Update(tea.KeyPressMsg{Code: '4', Text: "4"})
+	model = fourth.(Model)
+	finish := guideCopy(3)
+	for _, want := range []string{"Close the loop, keep the history", "Archive only a clean Done worktree", "branch, commits, PR identity"} {
+		if !strings.Contains(finish, want) {
+			t.Errorf("guide finish page missing %q:\n%s", want, finish)
+		}
+	}
+
+	closed, _ := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if closed.(Model).guideMode {
+		t.Fatal("question mark did not close guide")
+	}
+}
+
+func TestBoardFooterAdvertisesGuide(t *testing.T) {
+	footer := ansi.Strip(Model{width: 100}.renderFooter())
+	if !strings.Contains(footer, "? guide") {
+		t.Fatalf("footer does not advertise guide: %q", footer)
+	}
+}
+
+func TestBoardGuideFitsCommonTerminalSizes(t *testing.T) {
+	for _, size := range []struct {
+		width  int
+		height int
+	}{
+		{width: 110, height: 32},
+		{width: 80, height: 26},
+		{width: 60, height: 24},
+	} {
+		model := Model{width: size.width, height: size.height, guideMode: true}
+		rendered := model.renderGuideDialog()
+		if got, limit := lipgloss.Height(rendered), size.height-4; got > limit {
+			t.Errorf("%dx%d guide height = %d, exceeds %d", size.width, size.height, got, limit)
+		}
+		for lineNumber, line := range strings.Split(rendered, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Errorf("%dx%d line %d width = %d", size.width, size.height, lineNumber, got)
+			}
+		}
+	}
 }

@@ -756,7 +756,7 @@ func (m Model) renderPromptOverlay() string {
 	hint := lipgloss.NewStyle().Foreground(c.Muted).
 		Render("Enter send  Esc cancel")
 	content := title + "\n\n" + m.promptInput.View() + "\n\n" + hint
-	return dialogStyle().Padding(1, 2).Render(onPlane(content, c.Overlay))
+	return dialogStyle().Padding(1, 2).Render(theme.OnPlane(content, c.Overlay))
 }
 
 // renderConfirmOverlay renders the worktree removal dialog. It reports the
@@ -783,7 +783,7 @@ func (m Model) renderConfirmOverlay() string {
 
 	hint := lipgloss.NewStyle().Foreground(c.Muted).Render("y  delete      n / esc  keep")
 	content := title + "\n\n" + name + "\n" + path + "\n\n" + state + "\n\n" + hint
-	return dialogStyle().Padding(1, 2).Render(onPlane(content, c.Overlay))
+	return dialogStyle().Padding(1, 2).Render(theme.OnPlane(content, c.Overlay))
 }
 
 // --- Key handling ---
@@ -1581,7 +1581,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	// primary panel. Other panels (preview, details, empty states) stay
 	// on the quieter Border color.
 	return fitBox(primaryPanelStyle(), outerWidth, outerHeight).
-		Render(onPlane(body, surfaceBg())), sessionAt
+		Render(theme.OnPlane(body, surfaceBg())), sessionAt
 }
 
 // renderListView renders the visible window of session rows, and reports which
@@ -1724,7 +1724,7 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		line := " " + dot + " " + prefixStyled + agentStyled + nameStyled +
 			strings.Repeat(" ", gap) + starStyled + branchStyled +
 			strings.Repeat(" ", rowGutter)
-		lines = append(lines, bg.Width(width).Render(onPlane(line, rowBg)))
+		lines = append(lines, bg.Width(width).Render(theme.OnPlane(line, rowBg)))
 	}
 	return strings.Join(lines, "\n"), rowAt
 }
@@ -1788,7 +1788,7 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
 		return fitBox(panelStyle(), outerWidth, outerHeight).
-			Render(onPlane(mutedStyle().Render("No session selected"), surfaceBg()))
+			Render(theme.OnPlane(mutedStyle().Render("No session selected"), surfaceBg()))
 	}
 
 	innerWidth := outerWidth - 4
@@ -1922,7 +1922,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	}
 
 	detailStr := fitBox(panelStyle(), outerWidth, detailOuter).
-		Render(onPlane(detailContent, c.Surface))
+		Render(theme.OnPlane(detailContent, c.Surface))
 
 	// Preview section: gets the remaining height.
 	// inner = previewOuter - border(2), no vertical padding on previewPanelStyle.
@@ -1957,7 +1957,7 @@ func (m Model) viewRight(outerWidth, outerHeight int) string {
 	}
 
 	previewStr := fitBox(previewPanelStyle(), outerWidth, previewOuter).
-		Render(onPlane(previewContent, c.Surface))
+		Render(theme.OnPlane(previewContent, c.Surface))
 
 	return lipgloss.JoinVertical(lipgloss.Left, detailStr, previewStr)
 }
@@ -1981,7 +1981,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 
 	if len(m.filtered) == 0 {
 		return fitBox(panelStyle(), totalWidth, totalHeight).
-			Render(onPlane(mutedStyle().Render("No sessions found"), surfaceBg())), nil
+			Render(theme.OnPlane(mutedStyle().Render("No sessions found"), surfaceBg())), nil
 	}
 
 	// Search bar at top (1 line + 1 blank line = 2 lines)
@@ -2159,7 +2159,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 			if idx == m.cursor {
 				cellStyle = cellStyle.BorderForegroundBlend(c.GradientFrom, c.GradientTo)
 			}
-			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(onPlane(content, c.Surface))
+			cell := fitBox(cellStyle, cellWidth, cellHeight).Render(theme.OnPlane(content, c.Surface))
 
 			// The card's bounds in frame coordinates: one row down for the search
 			// bar, then whole cells from there, relative to the first visible row.
@@ -2182,7 +2182,7 @@ func (m Model) viewGrid(totalWidth, totalHeight int) (string, []cardHit) {
 	// a plane rather than whatever the terminal happened to be.
 	canvasLine := lipgloss.NewStyle().Background(canvasBg()).Width(totalWidth)
 
-	out := []string{canvasLine.Render(onPlane(" "+searchBar, canvasBg()))}
+	out := []string{canvasLine.Render(theme.OnPlane(" "+searchBar, canvasBg()))}
 	// Card rows already carry their own plane, so they are only padded out to
 	// the full width — for when cols does not divide totalWidth evenly. Running
 	// onPlane over them would inject the canvas *inside* the cards and undo

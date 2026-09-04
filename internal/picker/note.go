@@ -59,7 +59,7 @@ func (m Model) renderNoteOverlay() string {
 	hint := lipgloss.NewStyle().Foreground(c.Muted).
 		Render("Enter save  Esc cancel")
 	content := title + "\n\n" + m.noteInput.View() + "\n\n" + hint
-	return dialogStyle().Padding(1, 2).Render(onPlane(content, c.Overlay))
+	return dialogStyle().Padding(1, 2).Render(theme.OnPlane(content, c.Overlay))
 }
 
 func (m Model) noteInfoLine(s models.Session, innerWidth int) string {

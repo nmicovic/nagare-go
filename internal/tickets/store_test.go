@@ -1,7 +1,10 @@
 package tickets
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -178,5 +181,38 @@ func TestStoreHydratesLegacySubmissionMetadata(t *testing.T) {
 		loaded.SubmittedRepoPath != "/projects/nagare" ||
 		loaded.SubmittedAt == nil {
 		t.Fatalf("legacy submission was not hydrated: %#v", loaded)
+	}
+}
+
+func TestConcurrentUpdatesDoNotLoseSameTicketChanges(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ticket, err := store.Create(CreateInput{Title: "Concurrent", Status: StatusReady, Priority: PriorityMedium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	for index := range 12 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			token := fmt.Sprintf("|%02d|", index)
+			if _, err := store.Update(ticket.ID, func(current *Ticket) error {
+				current.Description += token
+				return nil
+			}); err != nil {
+				t.Errorf("Update: %v", err)
+			}
+		}()
+	}
+	wait.Wait()
+	updated, err := store.Get(ticket.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range 12 {
+		token := fmt.Sprintf("|%02d|", index)
+		if !strings.Contains(updated.Description, token) {
+			t.Errorf("lost concurrent update %s: %q", token, updated.Description)
+		}
 	}
 }

@@ -139,7 +139,7 @@ export default function (pi: ExtensionAPI) {
     name: "send_message",
     label: "Nagare: send message",
     description:
-      "Send a message to another agent session. The target must be idle. This is for informational messages that don't require a reply.",
+      "Persist a message for an idle agent and notify its pane. Returns a durable message ID; check message state later with check_messages.",
     promptSnippet: "Send a message to another agent session",
     parameters: Type.Object({
       target: Type.String({ description: "target session name" }),
@@ -154,7 +154,7 @@ export default function (pi: ExtensionAPI) {
     name: "send_message_and_wait",
     label: "Nagare: send message and wait",
     description:
-      "Send a message to another agent session and wait for a reply. The target must be idle. Use this when you need a response from the other agent.",
+      "Persist a message for an idle agent, notify its pane, and wait for a reply. Returns after 30 seconds if the target does not acknowledge reading; otherwise waits up to timeout.",
     promptSnippet: "Send a message to another agent session and wait for their reply",
     parameters: Type.Object({
       target: Type.String({ description: "target session name" }),
@@ -170,7 +170,7 @@ export default function (pi: ExtensionAPI) {
     name: "check_messages",
     label: "Nagare: check messages",
     description:
-      "Check for incoming messages from other agents and responses to your messages. Call this periodically to see if you have new messages to respond to.",
+      "Read incoming messages and inspect outgoing saved, notified, read, and replied states.",
     promptSnippet: "Check the nagare inbox for messages from other agents",
     parameters: Type.Object({}),
     async execute(_id, _params, signal) {

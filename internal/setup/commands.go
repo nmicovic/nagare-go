@@ -17,7 +17,8 @@ var commands = map[string]struct {
 
 Call check_messages() to see:
 - Pending messages sent to you (respond with reply())
-- Late responses to messages you sent (in case send_message_and_wait timed out)
+- Whether messages you sent are saved, notified, read, or answered
+- Late responses to messages whose wait ended
 
 If there are pending messages, read them carefully and use reply() to respond to each one.`,
 	},
@@ -25,13 +26,13 @@ If there are pending messages, read them carefully and use reply() to respond to
 		description: "List all available agent sessions using the nagare MCP server",
 		prompt: `List all available agent sessions using the nagare MCP server.
 
-Call list_agents() to show all sessions with their name, agent type, status (idle/working/waiting_input/dead), and project path.`,
+Call list_agents() to show all sessions with their name, agent type, status (idle/working/waiting_input/dead), unread-message count, and project path.`,
 	},
 	"nagare-send": {
 		description: "Send a message to another agent session (fire-and-forget)",
-		prompt: `Send a message to another agent session using the nagare MCP server (fire-and-forget, does not wait for response). Use check_messages() later to see if they responded.
+		prompt: `Send a message to another agent session using the nagare MCP server (fire-and-forget, does not wait for acknowledgment). Use check_messages() later to see its delivery state.
 
-First call list_agents() to find available sessions, then call send_message() with the target and message.
+First call list_agents() to find an idle session, then call send_message() with the target and message. The result includes the durable message ID.
 
 The user's argument is the message to send in the format: "TARGET_SESSION MESSAGE"
 
@@ -43,9 +44,9 @@ $ARGUMENTS`,
 	},
 	"nagare-send-wait": {
 		description: "Send a message to another agent and wait for their response",
-		prompt: `Send a message to another agent session using the nagare MCP server and WAIT for their response. This blocks until the other agent replies or times out.
+		prompt: `Send a message to another agent session using the nagare MCP server and WAIT for their response. The server reports an unacknowledged delivery after 30 seconds; once read, it waits until the reply timeout. An MCP client may background the tool call while the server is waiting.
 
-First call list_agents() to find available sessions and verify the target is IDLE, then call send_message_and_wait() with the target, message, and a reasonable timeout (default 120s).
+First call list_agents() to find an available session and verify the target is IDLE, then call send_message_and_wait() with the target, message, and a reasonable timeout (default 120s).
 
 The user's argument is the message to send in the format: "TARGET_SESSION MESSAGE"
 
@@ -132,10 +133,10 @@ You have access to the nagare MCP server for communicating with other AI agent s
 
 ## Available Tools
 
-- **list_agents()** — List all active agent sessions with name, type, status, and path
-- **send_message(target, message)** — Send a fire-and-forget message to another agent
-- **send_message_and_wait(target, message, timeout)** — Send a message and block until the other agent replies (default timeout: 120s)
-- **check_messages()** — Check your inbox for pending messages and late responses
+- **list_agents()** — List active sessions with name, type, status, unread-message count, and path
+- **send_message(target, message)** — Persist and notify a fire-and-forget message; returns its message ID
+- **send_message_and_wait(target, message, timeout)** — Persist and notify a message; fail after 30s without read acknowledgment, otherwise wait for the reply timeout
+- **check_messages()** — Read incoming messages and inspect outgoing saved/notified/read/replied state
 - **reply(message_id, content)** — Reply to a pending message
 - **list_tickets(status, project_path, today)** — List work tracked on the Nagare board
 - **get_ticket(ticket_id)** — Read a ticket's full context and acceptance criteria
@@ -147,16 +148,16 @@ You have access to the nagare MCP server for communicating with other AI agent s
 Call list_agents() to see all available sessions.
 
 ### Send a message (fire-and-forget)
-1. Call list_agents() to find the target
-2. Call send_message(target, message)
-3. Later, call check_messages() to see if they responded
+1. Call list_agents() to find an idle target.
+2. Call send_message(target, message) and retain the returned message ID.
+3. Later, call check_messages() to inspect whether it was notified or read.
 
 ### Send and wait for reply
-1. Call list_agents() and verify target is IDLE
-2. Call send_message_and_wait(target, message, timeout)
+1. Call list_agents() and verify target is IDLE.
+2. Call send_message_and_wait(target, message, timeout). The server reports if the target does not acknowledge reading within 30 seconds; an MCP client may background the call while it waits.
 
 ### Check inbox
-Call check_messages() — reply to pending messages with reply(message_id, content).
+Call check_messages() — reply to pending messages with reply(message_id, content), and report any unresolved outgoing states.
 
 ### Complete an assigned ticket
 1. Call get_ticket(ticket_id) if the assignment prompt does not contain enough context.

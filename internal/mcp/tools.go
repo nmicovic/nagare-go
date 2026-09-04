@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,18 +25,38 @@ func ListAgentsHandler(mySession string) string {
 	sessions := scanAll()
 
 	var lines []string
-	for _, s := range sessions {
-		if s.Name == mySession {
+	for _, session := range sessions {
+		if session.Name == mySession {
 			continue
 		}
+		status := models.StatusLabel(session.Status)
+		waiting, err := waitingMessageCount(session)
+		if err != nil {
+			status += "; message state unavailable"
+		} else if waiting > 0 {
+			status += fmt.Sprintf("; %d message(s) waiting", waiting)
+		}
 		lines = append(lines, fmt.Sprintf("- %s (%s) [%s] %s",
-			s.Name, models.AgentLabel(s.AgentType),
-			models.StatusLabel(s.Status), s.Path))
+			session.Name, models.AgentLabel(session.AgentType), status, session.Path))
 	}
 	if len(lines) == 0 {
 		return "No other agents found."
 	}
 	return strings.Join(lines, "\n")
+}
+
+func waitingMessageCount(session models.Session) (int, error) {
+	inbox, err := ListInboxFor(session.Name, session.PaneID)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, message := range inbox {
+		if message.Status == StatusPending || message.Status == StatusDelivered {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // SendMessageInput is the input for send_message tool.
@@ -58,25 +79,22 @@ func SendMessageHandler(mySession string, input SendMessageInput) string {
 	msg := Message{
 		ID:           NewMessageID(),
 		FromSession:  mySession,
+		FromPaneID:   os.Getenv("TMUX_PANE"),
 		ToSession:    input.Target,
+		ToPaneID:     session.PaneID,
 		Content:      input.Message,
 		ExpectsReply: false,
 		Status:       StatusPending,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Nudge target — act on the message immediately, no reply expected
-	nudge := fmt.Sprintf("URGENT: '%s' just sent you a message. Stop what you are doing, call check_messages() right now to read it, and act on it immediately. No reply needed, but the message itself may require action.", mySession)
-	paneTarget := paneTargetFor(session)
-	sendNudge(paneTarget, nudge)
-
-	// Write as delivered (single write)
-	msg.Status = StatusDelivered
-	if err := WriteMessage(msg); err != nil {
-		return fmt.Sprintf("Error writing message: %v", err)
+	// Persist before notifying so an immediate inbox check cannot race the file.
+	nudge := fmt.Sprintf("URGENT: message %s from '%s' requires attention. Call check_messages() now to read the persisted message.", msg.ID, mySession)
+	if err := deliverMessage(session, msg, nudge, sendNudge); err != nil {
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("Message sent to %s.", input.Target)
+	return fmt.Sprintf("Message %s was saved and its notification was submitted to %s.", msg.ID, input.Target)
 }
 
 // SendMessageAndWaitInput is the input for send_message_and_wait tool.
@@ -92,6 +110,9 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 	if timeout == 0 {
 		timeout = 120
 	}
+	if timeout < 0 {
+		return "Error: timeout must be zero (the default) or a positive number of seconds."
+	}
 
 	session, err := findSession(input.Target)
 	if err != nil {
@@ -105,42 +126,80 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 	msg := Message{
 		ID:           NewMessageID(),
 		FromSession:  mySession,
+		FromPaneID:   os.Getenv("TMUX_PANE"),
 		ToSession:    input.Target,
+		ToPaneID:     session.PaneID,
 		Content:      input.Message,
 		ExpectsReply: true,
 		Status:       StatusPending,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Nudge target — reply required
-	nudge := fmt.Sprintf("URGENT: '%s' sent you a message that requires a reply. Call check_messages() to read it, then reply() to respond.", mySession)
-	paneTarget := paneTargetFor(session)
-	sendNudge(paneTarget, nudge)
-
-	// Write as delivered (single write)
-	msg.Status = StatusDelivered
-	if err := WriteMessage(msg); err != nil {
+	// Persist before notifying so an immediate inbox check cannot race the file.
+	nudge := fmt.Sprintf("URGENT: message %s from '%s' requires a reply. Call check_messages() to read it, then reply('%s', ...) to respond.", msg.ID, mySession, msg.ID)
+	if err := deliverMessage(session, msg, nudge, sendNudge); err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
-	// Poll for response, respecting context cancellation
-	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return "Cancelled: client disconnected."
-		case <-time.After(2 * time.Second):
+	return waitForMessage(ctx, msg, time.Duration(timeout)*time.Second, 2*time.Second, 30*time.Second)
+}
+
+func waitForMessage(ctx context.Context, message Message, replyTimeout, pollInterval, deliveryTimeout time.Duration) string {
+	startedAt := time.Now()
+	replyDeadline := startedAt.Add(replyTimeout)
+	deliveryDeadline := startedAt.Add(deliveryTimeout)
+	if deliveryDeadline.After(replyDeadline) {
+		deliveryDeadline = replyDeadline
+	}
+	lastStatus := StatusDelivered
+
+	for {
+		nextDeadline := replyDeadline
+		if lastStatus != StatusRead && lastStatus != StatusCompleted && deliveryDeadline.Before(nextDeadline) {
+			nextDeadline = deliveryDeadline
 		}
-		updated, err := ReadMessage(input.Target, msg.ID)
+		wait := pollInterval
+		if remaining := time.Until(nextDeadline); remaining < wait {
+			wait = remaining
+		}
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return fmt.Sprintf("Cancelled while waiting for message %s: client disconnected.", message.ID)
+			case <-timer.C:
+			}
+		}
+
+		updated, err := ReadStoredMessage(message)
 		if err != nil {
-			continue
+			return fmt.Sprintf("Delivery state error for message %s: %v", message.ID, err)
 		}
+		lastStatus = updated.Status
 		if updated.Status == StatusCompleted && updated.Response != nil {
 			return *updated.Response
 		}
-	}
 
-	return fmt.Sprintf("Timeout: %s did not respond within %d seconds.", input.Target, timeout)
+		now := time.Now()
+		if lastStatus != StatusRead && lastStatus != StatusCompleted && !now.Before(deliveryDeadline) {
+			return fmt.Sprintf("Delivery unacknowledged: message %s was saved and the target pane was notified, but %s did not read it within %s.",
+				message.ID, message.ToSession, deliveryDeadline.Sub(startedAt))
+		}
+		if !now.Before(replyDeadline) {
+			if lastStatus == StatusRead || lastStatus == StatusCompleted {
+				return fmt.Sprintf("Timeout: %s read message %s but did not reply within %s.",
+					message.ToSession, message.ID, replyTimeout)
+			}
+			return fmt.Sprintf("Delivery unacknowledged: message %s was saved and the target pane was notified, but %s did not read it within %s.",
+				message.ID, message.ToSession, replyTimeout)
+		}
+	}
 }
 
 // CheckMessagesHandler returns pending incoming messages + completed outgoing responses.
@@ -148,7 +207,10 @@ func CheckMessagesHandler(mySession string) string {
 	var parts []string
 
 	// Incoming messages (my inbox)
-	inbox, _ := ListInbox(mySession)
+	inbox, err := ListInboxFor(mySession, os.Getenv("TMUX_PANE"))
+	if err != nil {
+		return fmt.Sprintf("Error reading inbox: %v", err)
+	}
 
 	// Unread: pending or delivered (not yet seen)
 	var unread []Message
@@ -167,9 +229,12 @@ func CheckMessagesHandler(mySession string) string {
 			parts = append(parts, fmt.Sprintf("From: %s (sent %s)\n%s\nMessage ID: %s\n%s",
 				m.FromSession, m.CreatedAt, actionNote, m.ID, m.Content))
 
-			// Mark as read
+			// Mark as read. The sender treats this durable state change as the
+			// delivery acknowledgment.
 			unread[i].Status = StatusRead
-			WriteMessage(unread[i])
+			if err := WriteMessage(unread[i]); err != nil {
+				parts = append(parts, fmt.Sprintf("WARNING: could not acknowledge message %s as read: %v", m.ID, err))
+			}
 		}
 	}
 
@@ -188,25 +253,54 @@ func CheckMessagesHandler(mySession string) string {
 		}
 	}
 
-	// Completed outgoing responses (scan other inboxes for messages FROM me)
-	baseDir := MessagesDir()
-	dirs, _ := os.ReadDir(baseDir)
-	var responses []Message
-	for _, d := range dirs {
-		if !d.IsDir() || d.Name() == sanitizeName(mySession) {
-			continue
-		}
-		msgs, _ := ListInbox(d.Name())
-		for _, m := range msgs {
-			if m.FromSession == mySession && m.Status == StatusCompleted && m.Response != nil {
-				responses = append(responses, m)
+	allMessages, err := ListAllMessages()
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("WARNING: outgoing message state unavailable: %v", err))
+	} else {
+		var outgoing, responses []Message
+		myPaneID := os.Getenv("TMUX_PANE")
+		for _, message := range allMessages {
+			fromCurrentAgent := message.FromSession == mySession
+			if myPaneID != "" && message.FromPaneID != "" {
+				fromCurrentAgent = message.FromPaneID == myPaneID
+			}
+			if !fromCurrentAgent {
+				continue
+			}
+			switch {
+			case message.Status == StatusPending || message.Status == StatusDelivered:
+				outgoing = append(outgoing, message)
+			case message.Status == StatusRead && message.ExpectsReply:
+				outgoing = append(outgoing, message)
+			case message.Status == StatusCompleted && message.Response != nil:
+				responses = append(responses, message)
 			}
 		}
-	}
-	if len(responses) > 0 {
-		parts = append(parts, "=== Responses to Your Messages ===")
-		for _, m := range responses {
-			parts = append(parts, fmt.Sprintf("Response from %s:\n%s", m.ToSession, *m.Response))
+		if len(outgoing) > 0 {
+			sort.Slice(outgoing, func(i, j int) bool {
+				return outgoing[i].CreatedAt > outgoing[j].CreatedAt
+			})
+			if len(outgoing) > 10 {
+				outgoing = outgoing[:10]
+			}
+			parts = append(parts, "=== Outgoing Message State ===")
+			for _, message := range outgoing {
+				state := "SAVED — waiting for target notification"
+				if message.Status == StatusDelivered {
+					state = "NOTIFIED — waiting for target to read"
+				} else if message.Status == StatusRead {
+					state = "READ — waiting for reply"
+				}
+				parts = append(parts, fmt.Sprintf("To: %s (sent %s)\nMessage ID: %s\nStatus: %s",
+					message.ToSession, message.CreatedAt, message.ID, state))
+			}
+		}
+		if len(responses) > 0 {
+			parts = append(parts, "=== Responses to Your Messages ===")
+			for _, message := range responses {
+				parts = append(parts, fmt.Sprintf("Response from %s to message %s:\n%s",
+					message.ToSession, message.ID, *message.Response))
+			}
 		}
 	}
 
@@ -224,7 +318,10 @@ type ReplyInput struct {
 
 // ReplyHandler updates a message with a response.
 func ReplyHandler(mySession string, input ReplyInput) string {
-	inbox, _ := ListInbox(mySession)
+	inbox, err := ListInboxFor(mySession, os.Getenv("TMUX_PANE"))
+	if err != nil {
+		return fmt.Sprintf("Error reading inbox: %v", err)
+	}
 	for _, m := range inbox {
 		if m.ID == input.MessageID {
 			now := time.Now().UTC().Format(time.RFC3339)
@@ -242,16 +339,44 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 
 // Helper functions
 
+// nudgeFunc submits a persisted-message notice to an agent pane.
+type nudgeFunc func(paneTarget, text string) error
+
+// deliverMessage persists before notifying so an immediate inbox check cannot
+// race the file. It records notification only if the target has not already
+// advanced the message to read or completed.
+func deliverMessage(session models.Session, message Message, nudge string, notify nudgeFunc) error {
+	message.Status = StatusPending
+	if err := WriteMessage(message); err != nil {
+		return fmt.Errorf("writing message: %w", err)
+	}
+	if err := notify(paneTargetFor(session), nudge); err != nil {
+		return fmt.Errorf("message %s was saved, but target notification failed: %w", message.ID, err)
+	}
+	stored, err := ReadStoredMessage(message)
+	if err != nil {
+		return fmt.Errorf("message %s was saved and target notification submitted, but its delivery state could not be read: %w", message.ID, err)
+	}
+	if stored.Status != StatusPending {
+		return nil
+	}
+	stored.Status = StatusDelivered
+	if err := WriteMessage(stored); err != nil {
+		return fmt.Errorf("message %s was saved and target notification submitted, but notification state could not be recorded: %w", message.ID, err)
+	}
+	return nil
+}
+
 // sendNudge sends a text nudge then Enter to a tmux pane as two separate
-// send-keys calls. Agent TUIs (Claude Code, etc.) debounce input — if the
-// text and Enter arrive in one burst, they treat Enter as a newline inside
-// the input buffer rather than a submit. The `-l` flag sends the text
-// literally so a nudge containing a tmux key name (e.g. "Enter") isn't
-// interpreted as a key.
-func sendNudge(paneTarget, text string) {
-	tmux.RunTmux("send-keys", "-t", paneTarget, "-l", text)
+// send-keys calls. Agent TUIs debounce input; one burst can leave Enter as a
+// newline inside the input buffer instead of submitting the notice.
+func sendNudge(paneTarget, text string) error {
+	if _, err := tmux.RunStrict("send-keys", "-t", paneTarget, "-l", text); err != nil {
+		return err
+	}
 	time.Sleep(50 * time.Millisecond)
-	tmux.RunTmux("send-keys", "-t", paneTarget, "Enter")
+	_, err := tmux.RunStrict("send-keys", "-t", paneTarget, "Enter")
+	return err
 }
 
 // paneTargetFor builds a tmux pane target for a discovered session. It uses

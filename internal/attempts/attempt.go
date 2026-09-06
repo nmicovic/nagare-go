@@ -24,6 +24,7 @@ type Attempt struct {
 	TicketID          string     `json:"ticket_id"`
 	State             State      `json:"state"`
 	Agent             string     `json:"agent"`
+	Model             string     `json:"model,omitempty"`
 	ProjectPath       string     `json:"project_path"`
 	TargetBranch      string     `json:"target_branch"`
 	BaseCommit        string     `json:"base_commit,omitempty"`
@@ -47,6 +48,7 @@ type Attempt struct {
 type CreateInput struct {
 	TicketID     string
 	Agent        string
+	Model        string
 	ProjectPath  string
 	TargetBranch string
 }

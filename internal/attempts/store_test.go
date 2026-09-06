@@ -11,6 +11,7 @@ func TestAttemptLifecyclePersistsImmutableExecutionProvenance(t *testing.T) {
 	attempt, err := store.Create(CreateInput{
 		TicketID:     "ticket-1",
 		Agent:        "codex",
+		Model:        "gpt-5.6-codex",
 		ProjectPath:  filepath.Join(t.TempDir(), "repo"),
 		TargetBranch: "main",
 	})
@@ -39,7 +40,8 @@ func TestAttemptLifecyclePersistsImmutableExecutionProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.State != StateRunning || loaded.BaseCommit != "abc123" || loaded.PaneID != "%12" {
+	if loaded.State != StateRunning || loaded.BaseCommit != "abc123" ||
+		loaded.PaneID != "%12" || loaded.Model != "gpt-5.6-codex" {
 		t.Fatalf("loaded attempt = %#v", loaded)
 	}
 	listed, err := store.ListForTicket("ticket-1")

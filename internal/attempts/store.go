@@ -37,6 +37,7 @@ func (s *Store) Create(input CreateInput) (Attempt, error) {
 		TicketID:     strings.TrimSpace(input.TicketID),
 		State:        StateProvisioning,
 		Agent:        strings.TrimSpace(input.Agent),
+		Model:        strings.TrimSpace(input.Model),
 		ProjectPath:  cleanPath(input.ProjectPath),
 		TargetBranch: strings.TrimSpace(input.TargetBranch),
 		CreatedAt:    now,

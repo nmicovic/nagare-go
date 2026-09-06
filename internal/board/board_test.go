@@ -177,6 +177,38 @@ func TestRunOpensAgentPickerForRepositoryTicket(t *testing.T) {
 	}
 }
 
+func TestRunCollectsModelAfterAgentSelection(t *testing.T) {
+	model := Model{
+		tickets: []tickets.Ticket{{
+			ID:          "ticket",
+			Title:       "Use a selected model",
+			ProjectPath: "/repo",
+			Status:      tickets.StatusReady,
+			Priority:    tickets.PriorityMedium,
+		}},
+		column:  statusIndex(tickets.StatusReady),
+		cursors: map[tickets.Status]int{tickets.StatusReady: 0},
+	}
+	next, _ := model.startRun()
+	model = next.(Model)
+	next, _ = model.handleRunKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if model.runMode || !model.modelMode || model.runAgent != models.AgentClaude {
+		t.Fatalf("model selection state = %#v", model)
+	}
+	model.width = 100
+	model.height = 30
+	model.modelInput.SetValue("fable")
+	if dialog := ansi.Strip(model.renderModelDialog()); !strings.Contains(dialog, "fable") {
+		t.Fatalf("model dialog does not show the selection:\n%s", dialog)
+	}
+	next, command := model.handleModelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if command == nil || !model.launching || model.modelMode {
+		t.Fatalf("model confirmation did not start provisioning: %#v", model)
+	}
+}
+
 func TestManagedTicketMustBeArchivedBeforeDeletion(t *testing.T) {
 	model := Model{
 		tickets: []tickets.Ticket{{

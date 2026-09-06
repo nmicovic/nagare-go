@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -79,6 +80,9 @@ type Model struct {
 	runMode         bool
 	runAgents       []models.AgentType
 	runCursor       int
+	runAgent        models.AgentType
+	modelMode       bool
+	modelInput      textinput.Model
 	launching       bool
 	agentsMode      bool
 	availableAgents []models.Session
@@ -119,7 +123,15 @@ func NewDeferred(store *tickets.Store) Model {
 		orchestrator: orchestrator.NewDefaultService(),
 		cursors:      make(map[tickets.Status]int),
 		todayOnly:    true,
+		modelInput:   newModelInput(),
 	}
+}
+
+func newModelInput() textinput.Model {
+	input := textinput.New()
+	input.CharLimit = 128
+	input.Prompt = ""
+	return input
 }
 
 // Activate refreshes a deferred board and starts its update ticker.
@@ -254,6 +266,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.archiveMode {
 			return m.handleArchiveKey(msg)
+		}
+		if m.modelMode {
+			return m.handleModelKey(msg)
 		}
 		if m.runMode {
 			return m.handleRunKey(msg)
@@ -423,6 +438,8 @@ func (m Model) handleRunKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.runMode = false
 		m.runAgents = nil
 		m.runCursor = 0
+		m.runAgent = models.AgentUnknown
+		m.modelInput = newModelInput()
 	case "up", "k":
 		if m.runCursor > 0 {
 			m.runCursor--
@@ -435,29 +452,70 @@ func (m Model) handleRunKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.runCursor < 0 || m.runCursor >= len(m.runAgents) {
 			return m, nil
 		}
-		ticket, ok := m.selectedTicket()
-		if !ok {
+		agent := m.runAgents[m.runCursor]
+		if session.SupportsModelSelection(string(agent)) {
+			m.runAgent = agent
 			m.runMode = false
-			return m, nil
+			m.modelMode = true
+			m.modelInput.SetValue("")
+			return m, m.modelInput.Focus()
 		}
-		service := m.orchestrator
-		if service == nil {
-			service = orchestrator.NewDefaultService()
-			m.orchestrator = service
-		}
-		agent := string(m.runAgents[m.runCursor])
-		store := m.store
-		m.runMode = false
-		m.runAgents = nil
-		m.runCursor = 0
-		m.launching = true
-		m.statusNote = "provisioning isolated worktree..."
-		return m, func() tea.Msg {
-			attempt, err := service.Start(store, ticket.ID, agent)
-			return launchMsg{sessionName: attempt.SessionName, err: err}
-		}
+		return m.launchRun(agent, "")
 	}
 	return m, nil
+}
+
+func (m Model) handleModelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.modelMode = false
+		m.modelInput.Blur()
+		m.statusErr = ""
+		m.modelInput.SetValue("")
+		m.runMode = true
+		return m, nil
+	case "enter":
+		model := strings.TrimSpace(m.modelInput.Value())
+		if err := session.ValidateModelSelection(string(m.runAgent), model); err != nil {
+			m.statusErr = err.Error()
+			return m, nil
+		}
+		return m.launchRun(m.runAgent, model)
+	default:
+		m.statusErr = ""
+		var command tea.Cmd
+		m.modelInput, command = m.modelInput.Update(msg)
+		return m, command
+	}
+}
+
+func (m Model) launchRun(agent models.AgentType, model string) (tea.Model, tea.Cmd) {
+	ticket, ok := m.selectedTicket()
+	if !ok {
+		m.runMode = false
+		m.modelMode = false
+		return m, nil
+	}
+	service := m.orchestrator
+	if service == nil {
+		service = orchestrator.NewDefaultService()
+		m.orchestrator = service
+	}
+	spec := session.AgentSpec{Agent: string(agent), Model: strings.TrimSpace(model)}
+	store := m.store
+	m.runMode = false
+	m.runAgents = nil
+	m.runCursor = 0
+	m.runAgent = models.AgentUnknown
+	m.modelMode = false
+	m.modelInput.Blur()
+	m.modelInput.SetValue("")
+	m.launching = true
+	m.statusNote = "provisioning isolated worktree..."
+	return m, func() tea.Msg {
+		attempt, err := service.Start(store, ticket.ID, spec)
+		return launchMsg{sessionName: attempt.SessionName, err: err}
+	}
 }
 
 func (m Model) handleAgentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -746,6 +804,9 @@ func (m Model) startRun() (tea.Model, tea.Cmd) {
 		m.statusErr = "ticket has no repository; press e to set one"
 		return m, nil
 	}
+	m.runAgent = models.AgentUnknown
+	m.modelMode = false
+	m.modelInput = newModelInput()
 	m.runAgents = []models.AgentType{
 		models.AgentClaude,
 		models.AgentCodex,
@@ -836,6 +897,9 @@ func (m Model) view() string {
 	}
 	if m.runMode {
 		columns = m.renderRunDialog()
+	}
+	if m.modelMode {
+		columns = m.renderModelDialog()
 	}
 	if m.agentsMode {
 		columns = m.renderAgentsDialog("Available agents", m.availableAgents, m.agentsCursor, "j/k choose  enter open  a/esc close")
@@ -1273,7 +1337,7 @@ func (m Model) renderRunDialog() string {
 		body.WriteByte('\n')
 	}
 	body.WriteString("\n")
-	body.WriteString(lipgloss.NewStyle().Foreground(colors.Muted).Render("j/k choose  enter run  esc cancel"))
+	body.WriteString(lipgloss.NewStyle().Foreground(colors.Muted).Render("j/k choose  enter continue  esc cancel"))
 	box := lipgloss.NewStyle().
 		Width(outerWidth).
 		Background(colors.Overlay).
@@ -1282,6 +1346,56 @@ func (m Model) renderRunDialog() string {
 		Padding(1, 2).
 		Render(body.String())
 	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) renderModelDialog() string {
+	colors := theme.Current().Colors
+	outerWidth := min(min(max(44, m.width/2), 72), max(20, m.width-4))
+	innerWidth := max(20, outerWidth-6)
+	input := m.modelInput
+	input.SetWidth(max(8, innerWidth-4))
+
+	title := lipgloss.NewStyle().Foreground(colors.Primary).Bold(true).Render("Choose model")
+	agent := lipgloss.NewStyle().
+		Foreground(colors.Background).
+		Background(colors.Accent).
+		Bold(true).
+		Padding(0, 1).
+		Render(models.AgentLabel(m.runAgent))
+	label := lipgloss.NewStyle().Foreground(colors.Foreground).Bold(true).Render("Model")
+	field := lipgloss.NewStyle().
+		Width(innerWidth).
+		Foreground(colors.Foreground).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colors.BorderFocus).
+		Padding(0, 1).
+		Render(input.View())
+	examples := lipgloss.NewStyle().Foreground(colors.Subtle).Render(modelInputHint(m.runAgent))
+	hint := lipgloss.NewStyle().Foreground(colors.Muted).
+		Render("enter run  empty uses agent default  esc back")
+	body := strings.Join([]string{title + "  " + agent, "", label, field, examples, "", hint}, "\n")
+	box := lipgloss.NewStyle().
+		Width(outerWidth).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(colors.Primary, colors.Secondary, colors.Primary).
+		Padding(1, 2).
+		Render(body)
+	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
+func modelInputHint(agent models.AgentType) string {
+	switch agent {
+	case models.AgentClaude:
+		return "Aliases: fable, opus, sonnet; full model IDs also work."
+	case models.AgentOpenCode, models.AgentPi:
+		return "Use a model ID or provider/model."
+	case models.AgentOhMyPi:
+		return "Use a model ID, provider/model, or fuzzy model name."
+	default:
+		return "Use the model ID accepted by this agent."
+	}
 }
 
 func (m Model) renderAgentsDialog(title string, agents []models.Session, cursor int, hint string) string {

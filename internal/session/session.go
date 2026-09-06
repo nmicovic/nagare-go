@@ -77,7 +77,7 @@ func Create(path, name, agent string, continueSession bool) (string, error) {
 	tmux.RunTmux("new-session", "-d", "-s", name, "-c", path)
 
 	// Launch agent
-	cmd := agentCommand(agent, path, continueSession)
+	cmd := agentCommand(agent, "", path, continueSession)
 	tmux.RunTmux("send-keys", "-t", name, cmd, "Enter")
 
 	// Register
@@ -101,7 +101,7 @@ func Load(path, name, agent string) (string, error) {
 	for _, line := range strings.Split(existing, "\n") {
 		if strings.TrimSpace(line) == name {
 			// Session exists but agent is dead — launch agent in it
-			cmd := agentCommand(agent, path, true)
+			cmd := agentCommand(agent, "", path, true)
 			tmux.RunTmux("send-keys", "-t", name, cmd, "Enter")
 			log.Info("loaded agent in existing session %s (%s)", name, agent)
 			return name, nil
@@ -110,7 +110,7 @@ func Load(path, name, agent string) (string, error) {
 
 	// Create new tmux session
 	tmux.RunTmux("new-session", "-d", "-s", name, "-c", path)
-	cmd := agentCommand(agent, path, true)
+	cmd := agentCommand(agent, "", path, true)
 	tmux.RunTmux("send-keys", "-t", name, cmd, "Enter")
 
 	reg := state.NewRegistry(state.DefaultRegistryPath())
@@ -142,41 +142,69 @@ func claudeSessionExists(projectPath string) bool {
 	return false
 }
 
+// SupportsModelSelection reports whether the agent accepts a per-session model flag.
+func SupportsModelSelection(agent string) bool {
+	switch agent {
+	case "claude", "codex", "opencode", "gemini", "pi", "omp":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateModelSelection checks that a model can be safely passed to the selected agent.
+func ValidateModelSelection(agent, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	if !SupportsModelSelection(agent) {
+		return fmt.Errorf("%s does not support per-session model selection", agent)
+	}
+	if strings.HasPrefix(model, "-") {
+		return fmt.Errorf("model must not start with a dash")
+	}
+	for _, char := range model {
+		switch {
+		case char >= 'a' && char <= 'z',
+			char >= 'A' && char <= 'Z',
+			char >= '0' && char <= '9',
+			strings.ContainsRune("._:/@+-", char):
+		default:
+			return fmt.Errorf("model contains unsupported character %q", char)
+		}
+	}
+	return nil
+}
+
 // agentCommand returns the command to launch an agent.
-func agentCommand(agent, projectPath string, continueSession bool) string {
+func agentCommand(agent, model, projectPath string, continueSession bool) string {
+	command := agent
+	if model = strings.TrimSpace(model); model != "" {
+		command += " --model " + model
+	}
 	switch agent {
 	case "opencode":
 		if continueSession {
-			return "opencode -c"
+			return command + " -c"
 		}
-		return "opencode"
-	case "gemini":
-		return "gemini"
-	case "crush":
-		return "crush"
-	case "pi":
+	case "gemini", "crush":
+	case "pi", "omp":
 		if continueSession {
-			return "pi -c"
+			return command + " -c"
 		}
-		return "pi"
-	case "omp":
-		if continueSession {
-			return "omp -c"
-		}
-		return "omp"
 	case "codex":
 		// Codex has no -c: resuming is its own subcommand, and --last picks the
 		// most recent thread instead of opening the session picker.
 		if continueSession {
-			return "codex resume --last"
+			return command + " resume --last"
 		}
-		return "codex"
 	default: // claude
 		if continueSession && claudeSessionExists(projectPath) {
-			return "claude -c"
+			return command + " -c"
 		}
-		return "claude"
 	}
+	return command
 }
 
 // ListDirectories returns directory suggestions for path autocomplete.

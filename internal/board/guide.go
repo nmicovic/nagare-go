@@ -40,7 +40,7 @@ var boardGuidePages = []guidePage{
 		title: "Run without touching your checkout",
 		lead:  "Every run gets its own branch, worktree, and agent pane. Your original checkout stays on its current branch.",
 		lines: []guideLine{
-			{label: "d", text: "Choose an agent and start the selected Backlog or Ready ticket."},
+			{label: "d", text: "Choose an agent, then optionally select its model. Empty model input uses the agent default."},
 			{label: "Branch", text: "nagare/<ticket>-<attempt> records exactly which branch belongs to the run."},
 			{label: "Worktree", text: "~/.local/share/nagare/workspaces/\n<attempt-id>/<repo>/"},
 			{label: "Running", text: "Press Enter on the ticket to jump back to its assigned agent pane."},

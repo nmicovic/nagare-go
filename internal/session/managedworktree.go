@@ -14,6 +14,12 @@ import (
 	"github.com/nemke/nagare-go/internal/tmux"
 )
 
+// AgentSpec identifies the agent executable and optional per-session model.
+type AgentSpec struct {
+	Agent string
+	Model string
+}
+
 // ManagedWorktree identifies the resources created for an orchestrated attempt.
 type ManagedWorktree struct {
 	ProjectPath  string
@@ -53,8 +59,13 @@ func SendPromptToPane(paneID, prompt string) error {
 // LaunchManagedWorktree creates an explicitly based worktree and starts an agent
 // in a dedicated tmux window. Once Git creation succeeds, later failures leave
 // the branch and worktree intact for recovery.
-func LaunchManagedWorktree(repoPath, worktreePath, windowName, branch, baseCommit, agent string) (ManagedWorktree, error) {
-	if err := ValidateAgent(agent); err != nil {
+func LaunchManagedWorktree(repoPath, worktreePath, windowName, branch, baseCommit string, spec AgentSpec) (ManagedWorktree, error) {
+	spec.Agent = strings.TrimSpace(spec.Agent)
+	spec.Model = strings.TrimSpace(spec.Model)
+	if err := ValidateAgent(spec.Agent); err != nil {
+		return ManagedWorktree{}, err
+	}
+	if err := ValidateModelSelection(spec.Agent, spec.Model); err != nil {
 		return ManagedWorktree{}, err
 	}
 	mainRoot := git.MainRoot(ExpandPath(repoPath))
@@ -87,13 +98,13 @@ func LaunchManagedWorktree(repoPath, worktreePath, windowName, branch, baseCommi
 	if paneID == "" {
 		return ManagedWorktree{}, fmt.Errorf("tmux did not report the new pane ID")
 	}
-	if _, err := tmux.RunStrict("send-keys", "-t", paneID, agentCommand(agent, worktreePath, false), "Enter"); err != nil {
+	if _, err := tmux.RunStrict("send-keys", "-t", paneID, agentCommand(spec.Agent, spec.Model, worktreePath, false), "Enter"); err != nil {
 		return ManagedWorktree{}, err
 	}
 
 	displayName := sessName + "/" + windowName
-	state.NewRegistry(state.DefaultRegistryPath()).Register(displayName, worktreePath, agent)
-	log.Info("created managed attempt %s (%s) on %s at %s", displayName, agent, branch, worktreePath)
+	state.NewRegistry(state.DefaultRegistryPath()).Register(displayName, worktreePath, spec.Agent)
+	log.Info("created managed attempt %s (%s/%s) on %s at %s", displayName, spec.Agent, spec.Model, branch, worktreePath)
 	return ManagedWorktree{
 		ProjectPath:  mainRoot,
 		WorktreePath: worktreePath,

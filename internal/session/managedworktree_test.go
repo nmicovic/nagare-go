@@ -64,7 +64,7 @@ func TestLaunchManagedWorktreeOwnsCreationForEveryAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktree := filepath.Join(t.TempDir(), "workspace", "repo")
-	managed, err := LaunchManagedWorktree(repo, worktree, "ticket-attempt", "nagare/ticket-attempt", base, "claude")
+	managed, err := LaunchManagedWorktree(repo, worktree, "ticket-attempt", "nagare/ticket-attempt", base, AgentSpec{Agent: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestLaunchFailureAfterGitCreationKeepsWorktreeForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktree := filepath.Join(t.TempDir(), "workspace", "repo")
-	if _, err := LaunchManagedWorktree(repo, worktree, "ticket-attempt", "nagare/ticket-attempt", base, "codex"); err == nil {
+	if _, err := LaunchManagedWorktree(repo, worktree, "ticket-attempt", "nagare/ticket-attempt", base, AgentSpec{Agent: "codex"}); err == nil {
 		t.Fatal("LaunchManagedWorktree() = nil error")
 	}
 	if _, err := os.Stat(worktree); err != nil {

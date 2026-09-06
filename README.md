@@ -90,7 +90,7 @@ nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 | `[` / `]` | Move ticket left / right |
 | `n` | Create ticket |
 | `e` | Edit ticket |
-| `d` | Run ticket with a selected agent in an isolated worktree |
+| `d` | Run a ticket with a selected agent and optional model in an isolated worktree |
 | `v` | Inspect the submitted attempt's stats and scrollable diff |
 | `p` | Confirm a non-force push of the recorded branch and create or recover its GitHub pull request |
 | `c` | Archive a done ticket's clean worktree after its agent pane closes; retain the branch |
@@ -106,9 +106,12 @@ and right arrows, or `1`–`4` to move between Plan, Isolate, Review, and Finish
 The guide explains the complete workflow without leaving Nagare.
 
 Each ticket records its repository and target branch. Press `d` on a Backlog or
-Ready ticket to select an agent and start an isolated attempt. Nagare resolves
-the target to an immutable base commit, creates a dedicated branch and managed
-worktree, launches the agent there, and keeps the source checkout unchanged.
+Ready ticket to select an agent, then enter a model or leave the model empty to
+use that agent's default. Agents with a per-session model option receive it when
+their process starts; Crush currently uses its configured default because its
+CLI has no per-session model flag. Nagare resolves the target to an immutable
+base commit, creates a dedicated branch and managed worktree, launches the agent
+there, and keeps the source checkout unchanged.
 Managed ticket worktrees live at
 `~/.local/share/nagare/workspaces/<attempt-id>/<repository>/`, on branches named
 `nagare/<ticket>-<attempt>`. Archiving removes only the clean managed worktree;

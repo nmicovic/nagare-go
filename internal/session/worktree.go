@@ -70,7 +70,7 @@ func planWorktreeLaunch(agent, mainRoot, name string, claudeTrusted bool) worktr
 	path := filepath.Join(mainRoot, ".worktrees", name)
 	return worktreeLaunch{
 		// A brand new worktree has no prior session, so never continue.
-		Cmd:       agentCommand(agent, path, false),
+		Cmd:       agentCommand(agent, "", path, false),
 		Cwd:       path,
 		Path:      path,
 		PreCreate: true,

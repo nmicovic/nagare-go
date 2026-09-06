@@ -118,18 +118,20 @@ waiting worktree lifts its whole repo. Rows are derived per frame by
 
 ### Ticket orchestration
 
-`d` on a backlog or ready ticket selects an agent and starts one durable attempt.
-The ticket must name a repository and target branch. Nagare resolves the target to
-an immutable commit without switching the source checkout, creates
-`nagare/<ticket>-<attempt>` under
+`d` on a backlog or ready ticket selects an agent, then accepts an optional
+per-session model. Blank input preserves the agent's configured default. Claude,
+Codex, OpenCode, Gemini, pi, and OhMyPi receive `--model`; Crush skips model
+selection because its CLI has no per-session model flag. The ticket must name a
+repository and target branch. Nagare resolves the target to an immutable commit
+without switching the source checkout, creates `nagare/<ticket>-<attempt>` under
 `~/.local/share/nagare/workspaces/<attempt>/<repo>`, and starts every agent —
 including Claude Code — inside that Nagare-created worktree.
 
 Attempt records live independently under `~/.local/share/nagare/attempts/`.
-They retain the base commit, branch, worktree, agent, session, pane, errors, and
-submission time so retries do not overwrite provenance. Ticket and attempt file
-updates use cross-process record locks because the board and an agent MCP server
-can update the same record concurrently.
+They retain the base commit, branch, worktree, agent, selected model, session,
+pane, errors, and submission time so retries do not overwrite provenance.
+Ticket and attempt file updates use cross-process record locks because the board
+and an agent MCP server can update the same record concurrently.
 
 Provisioning never checks out or modifies the target branch. A failure after Git
 creation deliberately leaves the branch and worktree intact. Reconciliation may

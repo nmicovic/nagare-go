@@ -18,7 +18,7 @@ import (
 )
 
 // LaunchFunc creates the worktree and starts the agent process.
-type LaunchFunc func(repoPath, worktreePath, windowName, branch, baseCommit, agent string) (session.ManagedWorktree, error)
+type LaunchFunc func(repoPath, worktreePath, windowName, branch, baseCommit string, spec session.AgentSpec) (session.ManagedWorktree, error)
 
 // DeliverFunc delivers the ticket contract to the newly started agent.
 type DeliverFunc func(target, message string) error
@@ -59,9 +59,14 @@ func NewDefaultService() *Service {
 }
 
 // Start creates one immutable attempt, launches it, and assigns the ticket.
-func (s *Service) Start(store *tickets.Store, ticketID, agent string) (attempts.Attempt, error) {
+func (s *Service) Start(store *tickets.Store, ticketID string, spec session.AgentSpec) (attempts.Attempt, error) {
 	startMu.Lock()
 	defer startMu.Unlock()
+	spec.Agent = strings.TrimSpace(spec.Agent)
+	spec.Model = strings.TrimSpace(spec.Model)
+	if err := session.ValidateModelSelection(spec.Agent, spec.Model); err != nil {
+		return attempts.Attempt{}, err
+	}
 
 	ticket, err := store.Get(ticketID)
 	if err != nil {
@@ -91,7 +96,8 @@ func (s *Service) Start(store *tickets.Store, ticketID, agent string) (attempts.
 
 	attempt, err := s.attempts.Create(attempts.CreateInput{
 		TicketID:     ticket.ID,
-		Agent:        agent,
+		Agent:        spec.Agent,
+		Model:        spec.Model,
 		ProjectPath:  mainRoot,
 		TargetBranch: target,
 	})
@@ -122,7 +128,7 @@ func (s *Service) Start(store *tickets.Store, ticketID, agent string) (attempts.
 		return attempts.Attempt{}, err
 	}
 
-	managed, err := s.launch(mainRoot, worktreePath, windowName, branch, baseCommit, agent)
+	managed, err := s.launch(mainRoot, worktreePath, windowName, branch, baseCommit, spec)
 	if err != nil {
 		s.markFailed(attempt.ID, err)
 		return attempts.Attempt{}, err
@@ -147,7 +153,7 @@ func (s *Service) Start(store *tickets.Store, ticketID, agent string) (attempts.
 		current.TargetBranch = target
 		current.AssigneeSession = managed.DisplayName
 		current.AssigneePaneID = managed.PaneID
-		current.AssigneeAgent = agent
+		current.AssigneeAgent = spec.Agent
 		current.ClearSubmission()
 		return nil
 	}); err != nil {

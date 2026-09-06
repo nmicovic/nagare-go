@@ -67,12 +67,12 @@ func TestStartPersistsAttemptAndAssignsDedicatedSession(t *testing.T) {
 
 	var delivered string
 	service := NewService(attemptStore,
-		func(repoPath, worktreePath, windowName, branch, baseCommit, agent string) (session.ManagedWorktree, error) {
+		func(repoPath, worktreePath, windowName, branch, baseCommit string, spec session.AgentSpec) (session.ManagedWorktree, error) {
 			if repoPath != repo || !strings.HasPrefix(worktreePath, workspaceRoot+string(filepath.Separator)) {
 				t.Fatalf("launch paths = %q, %q", repoPath, worktreePath)
 			}
-			if agent != "codex" || !strings.HasPrefix(branch, "nagare/") || len(baseCommit) != 40 {
-				t.Fatalf("launch identity = %q, %q, %q", agent, branch, baseCommit)
+			if spec.Agent != "codex" || spec.Model != "gpt-5.6-codex" || !strings.HasPrefix(branch, "nagare/") || len(baseCommit) != 40 {
+				t.Fatalf("launch identity = %#v, %q, %q", spec, branch, baseCommit)
 			}
 			return session.ManagedWorktree{DisplayName: "repo/attempt", PaneID: "%7"}, nil
 		},
@@ -82,11 +82,12 @@ func TestStartPersistsAttemptAndAssignsDedicatedSession(t *testing.T) {
 		})
 	service.workspaceRoot = workspaceRoot
 
-	attempt, err := service.Start(ticketStore, ticket.ID, "codex")
+	attempt, err := service.Start(ticketStore, ticket.ID, session.AgentSpec{Agent: "codex", Model: "gpt-5.6-codex"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if attempt.State != attempts.StateRunning || attempt.SessionName != "repo/attempt" || attempt.PaneID != "%7" {
+	if attempt.State != attempts.StateRunning || attempt.SessionName != "repo/attempt" ||
+		attempt.PaneID != "%7" || attempt.Agent != "codex" || attempt.Model != "gpt-5.6-codex" {
 		t.Fatalf("attempt = %#v", attempt)
 	}
 	updated, err := ticketStore.Get(ticket.ID)
@@ -109,13 +110,13 @@ func TestStartFailureKeepsTicketRetryableAndRecordsAttemptError(t *testing.T) {
 	ticket := createReadyTicket(t, ticketStore, repo)
 	attemptStore := attempts.NewStore(t.TempDir())
 	service := NewService(attemptStore,
-		func(string, string, string, string, string, string) (session.ManagedWorktree, error) {
+		func(string, string, string, string, string, session.AgentSpec) (session.ManagedWorktree, error) {
 			return session.ManagedWorktree{}, errors.New("tmux failed")
 		},
 		func(string, string) error { return nil })
 	service.workspaceRoot = t.TempDir()
 
-	if _, err := service.Start(ticketStore, ticket.ID, "claude"); err == nil {
+	if _, err := service.Start(ticketStore, ticket.ID, session.AgentSpec{Agent: "claude"}); err == nil {
 		t.Fatal("Start() = nil error")
 	}
 	updated, err := ticketStore.Get(ticket.ID)
@@ -140,14 +141,14 @@ func TestDeliveryFailureKeepsStartedAttemptRunningAndRecoverable(t *testing.T) {
 	ticket := createReadyTicket(t, ticketStore, repo)
 	attemptStore := attempts.NewStore(t.TempDir())
 	service := NewService(attemptStore,
-		func(string, string, string, string, string, string) (session.ManagedWorktree, error) {
+		func(string, string, string, string, string, session.AgentSpec) (session.ManagedWorktree, error) {
 			return session.ManagedWorktree{DisplayName: "repo/attempt", PaneID: "%8"}, nil
 		},
 		func(string, string) error { return errors.New("mailbox unavailable") })
 	service.direct = func(string, string) error { return errors.New("pane unavailable") }
 	service.workspaceRoot = t.TempDir()
 
-	attempt, err := service.Start(ticketStore, ticket.ID, "codex")
+	attempt, err := service.Start(ticketStore, ticket.ID, session.AgentSpec{Agent: "codex"})
 	if err == nil {
 		t.Fatal("Start() = nil error")
 	}

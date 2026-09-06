@@ -446,3 +446,98 @@ func TestInstallCodexSkill(t *testing.T) {
 		}
 	}
 }
+
+// An event nagare no longer installs must be deleted, never left as `null`.
+// Codex rejects a whole hooks.json over one null value — "invalid type: null,
+// expected a sequence" — which silently killed every nagare hook in it and left
+// working sessions reporting Idle.
+func TestInstallCodexHooksNeverLeavesANullEvent(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// PreToolUse is the event that caused this: installed by an older nagare,
+	// dropped from codexHookEvents, so nothing repopulates it.
+	stale := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"/old/nagare-go hook-state"}]}]}}`
+	if err := os.WriteFile(filepath.Join(codexDir, "hooks.json"), []byte(stale), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installCodexHooks(home, "/new/nagare-go"); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(codexDir, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "null") {
+		t.Errorf("hooks.json contains a null Codex will refuse to parse:\n%s", raw)
+	}
+	cfg, err := loadJSON(filepath.Join(codexDir, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg["hooks"].(map[string]interface{})["PreToolUse"]; ok {
+		t.Error("PreToolUse should be deleted once nagare stops installing it")
+	}
+}
+
+// Re-running setup over a file an earlier run already broke must repair it,
+// otherwise the user stays broken until they hand-edit the file.
+func TestInstallCodexHooksRepairsAnExistingNull(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	broken := `{"hooks":{"PreToolUse":null,"Stop":[{"hooks":[{"type":"command","command":"/old/nagare-go hook-state"}]}]}}`
+	if err := os.WriteFile(filepath.Join(codexDir, "hooks.json"), []byte(broken), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installCodexHooks(home, "/new/nagare-go"); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := os.ReadFile(filepath.Join(codexDir, "hooks.json"))
+	if strings.Contains(string(raw), "null") {
+		t.Errorf("setup did not repair the null:\n%s", raw)
+	}
+}
+
+// A hook the user wrote themselves survives, and an event holding only their
+// hooks is never deleted along with nagare's.
+func TestPruneNagareHooksKeepsForeignHooks(t *testing.T) {
+	hooksMap := map[string]interface{}{
+		"Stop": []interface{}{
+			map[string]interface{}{"hooks": []interface{}{
+				map[string]interface{}{"type": "command", "command": "my-own-hook"},
+			}},
+			map[string]interface{}{"hooks": []interface{}{
+				map[string]interface{}{"type": "command", "command": "/x/nagare-go hook-state"},
+			}},
+		},
+		"PreToolUse": []interface{}{
+			map[string]interface{}{"hooks": []interface{}{
+				map[string]interface{}{"type": "command", "command": "/x/nagare-go hook-state"},
+			}},
+		},
+		// A shape nagare did not write and does not understand: not its to delete.
+		"Custom": map[string]interface{}{"command": "something-else"},
+	}
+
+	pruneNagareHooks(hooksMap)
+
+	stop, ok := hooksMap["Stop"].([]interface{})
+	if !ok || len(stop) != 1 {
+		t.Fatalf("Stop = %#v, want the user's single hook", hooksMap["Stop"])
+	}
+	if _, ok := hooksMap["PreToolUse"]; ok {
+		t.Error("an event holding only nagare's hooks should be deleted")
+	}
+	if _, ok := hooksMap["Custom"]; !ok {
+		t.Error("an unrecognised value must be left alone")
+	}
+}

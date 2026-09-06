@@ -160,7 +160,6 @@ per-agent elsewhere.
 | OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
 | pi | extension `~/.pi/agent/extensions/nagare.ts` | `nagare-go tool` bridge (pi has no MCP) |
-| Codex | hooks in `~/.codex/hooks.json` | MCP (`~/.codex/config.toml`) |
 
 pi has no MCP client by design, so its extension registers the five nagare tools and
 shells out to `nagare-go tool <name> <json>`, which calls the same handlers the MCP
@@ -179,6 +178,11 @@ binary rather than assumed:
   with no warning — a hook written that way silently inherits the 600s default.
 - Codex has no `Notification` or `Elicitation` event, so `PermissionRequest` is the
   only signal for a waiting prompt, and it fires once.
+- An event whose value is `null` makes Codex reject the **entire** file
+  ("invalid type: null, expected a sequence") and run none of the hooks in it.
+  So an event nagare stops installing must be *deleted* from `hooks.json`, not
+  filtered to nothing — a Go nil slice marshals as `null`. `pruneNagareHooks`
+  owns that, and it repairs a file an earlier run already broke.
 - A new or changed hook is **untrusted** and does not run until the user approves it
   in Codex's startup review (or `/hooks`). Setup says so, because hooks that look
   installed and never fire read as a nagare bug. Do not reach for

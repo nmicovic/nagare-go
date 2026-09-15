@@ -432,3 +432,25 @@ func TestArchiveClosesOutATicketFinishedByHand(t *testing.T) {
 		t.Fatal("Archive() ran twice on one attempt")
 	}
 }
+
+func TestManagedSessionIsNamedAfterItsTicket(t *testing.T) {
+	cases := []struct {
+		title string
+		want  string
+	}{
+		{"New video compiler template", "new-video-compiler-template-3d7f13f1"},
+		{"Fix the 404 on /pricing!", "fix-the-404-on-pricing-3d7f13f1"},
+		{"A title long enough that it has to be cut somewhere", "a-title-long-enough-that-it-3d7f13f1"},
+		{"   ", "c798518c-3d7f13f1"},
+		{"日本語", "c798518c-3d7f13f1"},
+	}
+	for _, testCase := range cases {
+		got := windowNameFor(testCase.title, "c798518c", "3d7f13f1")
+		if got != testCase.want {
+			t.Errorf("windowNameFor(%q) = %q, want %q", testCase.title, got, testCase.want)
+		}
+		if strings.ContainsAny(got, ":./\\ ") {
+			t.Errorf("windowNameFor(%q) = %q, which tmux rejects as a window name", testCase.title, got)
+		}
+	}
+}

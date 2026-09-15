@@ -145,6 +145,12 @@ without switching the source checkout, creates `nagare/<ticket>-<attempt>` under
 `~/.local/share/nagare/workspaces/<attempt>/<repo>`, and starts every agent —
 including Claude Code — inside that Nagare-created worktree.
 
+The agent's tmux window is named after the ticket (`windowNameFor`), so the
+picker shows `repo/new-video-compiler-template-3d7f13f1` rather than an opaque
+pair of IDs. The attempt's short ID stays as a suffix: it is the one in the
+branch name, so a pane still says which branch it is on, and two attempts on one
+ticket would otherwise share a name that messaging resolves agents by.
+
 Attempt records live independently under `~/.local/share/nagare/attempts/`.
 They retain the base commit, branch, worktree, agent, selected model, session,
 pane, errors, and submission time so retries do not overwrite provenance.

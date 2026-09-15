@@ -113,7 +113,7 @@ func (s *Service) Start(store *tickets.Store, ticketID string, spec session.Agen
 	shortTicket := shortID(ticket.ID)
 	shortAttempt := shortID(attempt.ID)
 	branch := "nagare/" + shortTicket + "-" + shortAttempt
-	windowName := shortTicket + "-" + shortAttempt
+	windowName := windowNameFor(ticket.Title, shortTicket, shortAttempt)
 	worktreePath := filepath.Join(s.workspaceRoot, attempt.ID, filepath.Base(mainRoot))
 	attempt, err = s.attempts.Update(attempt.ID, func(current *attempts.Attempt) error {
 		current.BaseCommit = baseCommit
@@ -357,6 +357,43 @@ func managedPath(workspaceRoot, path string) error {
 		return fmt.Errorf("refusing unmanaged worktree path %s", path)
 	}
 	return nil
+}
+
+// windowNameFor names the tmux window, and so the session the picker and the
+// board show, after the ticket: "c798518c-3d7f13f1" says nothing about what the
+// agent is doing. The attempt's short ID stays as a suffix — it is the one in
+// the branch name, so a pane still says which branch it is on, and two attempts
+// on one ticket would otherwise share a name that nagare's messaging resolves
+// agents by.
+func windowNameFor(title, shortTicket, shortAttempt string) string {
+	slug := slugify(title, 28)
+	if slug == "" {
+		slug = shortTicket
+	}
+	return slug + "-" + shortAttempt
+}
+
+// slugify reduces a ticket title to a tmux-safe, readable name: lowercase
+// words joined by dashes, cut at a word boundary rather than mid-word.
+func slugify(title string, limit int) string {
+	var builder strings.Builder
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case builder.Len() > 0 && !strings.HasSuffix(builder.String(), "-"):
+			builder.WriteByte('-')
+		}
+	}
+	slug := strings.Trim(builder.String(), "-")
+	if len(slug) <= limit {
+		return slug
+	}
+	slug = slug[:limit]
+	if cut := strings.LastIndexByte(slug, '-'); cut > 0 {
+		slug = slug[:cut]
+	}
+	return strings.Trim(slug, "-")
 }
 
 func shortID(id string) string {

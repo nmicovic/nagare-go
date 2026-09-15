@@ -205,6 +205,31 @@ per-agent elsewhere.
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
 | pi | extension `~/.pi/agent/extensions/nagare.ts` | `nagare-go tool` bridge (pi has no MCP) |
 
+### Message identity is the agent instance
+
+A message records `from_agent_id` / `to_agent_id`: the session ID the agent
+reports through its hooks, read from the pane's state file at send time.
+Matching prefers it, because neither of the weaker identities is an agent:
+
+- A **pane** outlives the agent that ran in it. Keying outgoing state on the
+  pane handed the next occupant the previous agent's outbox and every reply to
+  it — observed in the wild across two unrelated repositories, delivered
+  silently, with an action item for a checkout the receiver did not have.
+- A **display name** is reused across repositories and months, and it
+  legitimately changes for one agent as panes are added or a window is renamed.
+
+The old filter *substituted* the pane check for the name check, so it was wrong
+in both directions: a new occupant inherited another agent's messages, and an
+agent whose pane was renumbered (a tmux server restart renumbers from `%0`)
+silently lost its own. Identity now degrades rather than substitutes:
+`Message.sentBy` / `addressedTo` take the agent ID when both sides have one,
+else the pane *plus* the display-name root, else the name. The root is the tmux
+session, which names the repository; only the suffix moves during a rename.
+
+Records written before agent IDs existed have only the weaker identities, so a
+name reused long enough after the fact can still match. `check_messages` caps
+responses at the ten most recent for that reason.
+
 pi has no MCP client by design, so its extension registers the five nagare tools and
 shells out to `nagare-go tool <name> <json>`, which calls the same handlers the MCP
 server calls. pi also has no permission prompts, so pi sessions never reach

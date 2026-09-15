@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/state"
 )
 
 func TestResolveSessionExact(t *testing.T) {
@@ -348,5 +349,138 @@ func TestCheckMessagesRecoversLegacyDisplayNameInbox(t *testing.T) {
 		if !strings.Contains(result, want) {
 			t.Errorf("legacy inbox recovery missing %q:\n%s", want, result)
 		}
+	}
+}
+
+// writeAgentState records a pane's current occupant the way the hook handler
+// does, which is where message identity gets its agent instance. Timestamps
+// advance because a pane keeps the state file of every agent that has run in
+// it, and the newest live one names the current occupant.
+var agentStateClock = time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+
+func writeAgentState(t *testing.T, paneID, agentID string) {
+	t.Helper()
+	dir := state.DefaultStatesDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentStateClock = agentStateClock.Add(time.Second)
+	if err := state.WriteState(dir, models.SessionState{
+		State: "idle", SessionID: agentID, PaneID: paneID,
+		Event: "Stop", Timestamp: agentStateClock.Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReusedPaneDoesNotInheritThePreviousAgentsMessages(t *testing.T) {
+	// Reported from a live session: a pane outlives the agent that ran in it,
+	// so keying outgoing state on the pane handed the next occupant another
+	// repository's reply, complete with an action item it could not act on.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TMUX_PANE", "%19")
+	response := "ACTION FOR YOU — the beacon doesn't send the session"
+	previous := Message{
+		ID:          "3c2cbb181078",
+		FromSession: "cosmic-platform-frontend/claude_02",
+		FromPaneID:  "%19",
+		ToSession:   "cosmic-platform-backend",
+		ToPaneID:    "%10",
+		Status:      StatusCompleted,
+		Response:    &response,
+		CreatedAt:   "2026-09-12T12:55:53Z",
+	}
+	if err := WriteMessage(previous); err != nil {
+		t.Fatal(err)
+	}
+
+	// A different agent, in a different repository, now occupies pane %19.
+	writeAgentState(t, "%19", "lab-frontend-session")
+	inbox := CheckMessagesHandler("cosmiclab-frontend/labFrontend")
+	if strings.Contains(inbox, previous.ID) || strings.Contains(inbox, response) {
+		t.Fatalf("new occupant of pane %%19 inherited the previous agent's reply:\n%s", inbox)
+	}
+
+	// The agent that actually sent it still sees it, renamed or not.
+	writeAgentState(t, "%19", "platform-frontend-session")
+	own := CheckMessagesHandler("cosmic-platform-frontend/ui")
+	if !strings.Contains(own, response) {
+		t.Fatalf("sender lost its own reply:\n%s", own)
+	}
+}
+
+func TestAgentKeepsItsMessagesWhenPanesAreRenumbered(t *testing.T) {
+	// The latent half of the same defect: substituting the pane check for the
+	// name check silently discarded an agent's own outgoing state whenever its
+	// pane ID changed, as a tmux server restart makes it.
+	t.Setenv("HOME", t.TempDir())
+	response := "Contract verified."
+	sent := Message{
+		ID:          "renumbered",
+		FromSession: "backend/claude_01",
+		FromPaneID:  "%19",
+		FromAgentID: "backend-session",
+		ToSession:   "frontend",
+		ToPaneID:    "%10",
+		Status:      StatusCompleted,
+		Response:    &response,
+		CreatedAt:   "2026-09-12T12:55:53Z",
+	}
+	if err := WriteMessage(sent); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_PANE", "%3")
+	writeAgentState(t, "%3", "backend-session")
+	inbox := CheckMessagesHandler("backend/claude_01")
+	if !strings.Contains(inbox, response) {
+		t.Fatalf("agent lost its own reply after its pane was renumbered:\n%s", inbox)
+	}
+}
+
+func TestSentMessagesRecordTheAgentInstance(t *testing.T) {
+	message := Message{FromSession: "repo/one", FromPaneID: "%19", FromAgentID: "session-a"}
+	cases := []struct {
+		name                     string
+		session, paneID, agentID string
+		want                     bool
+	}{
+		{"same instance", "repo/one", "%19", "session-a", true},
+		{"same instance, renamed window", "repo/two", "%19", "session-a", true},
+		{"same instance, renumbered pane", "repo/one", "%3", "session-a", true},
+		{"new agent in the same pane", "other/one", "%19", "session-b", false},
+		{"legacy record, same repo", "repo/two", "%19", "", true},
+		{"legacy record, reused pane", "other/one", "%19", "", false},
+	}
+	for _, testCase := range cases {
+		probe := message
+		if testCase.agentID == "" {
+			probe.FromAgentID = ""
+		}
+		if got := probe.sentBy(testCase.session, testCase.paneID, testCase.agentID); got != testCase.want {
+			t.Errorf("%s: sentBy = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+func TestPaneInboxDoesNotLeakToTheNextOccupant(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TMUX_PANE", "%19")
+	unread := Message{
+		ID: "unread", FromSession: "backend", ToSession: "platform-frontend/claude_02",
+		ToPaneID: "%19", ToAgentID: "platform-session", Status: StatusDelivered,
+		Content: "the beacon doesn't send the session", CreatedAt: "2026-09-12T12:55:53Z",
+	}
+	if err := WriteMessage(unread); err != nil {
+		t.Fatal(err)
+	}
+	writeAgentState(t, "%19", "lab-session")
+	inbox := CheckMessagesHandler("cosmiclab-frontend/labFrontend")
+	if strings.Contains(inbox, unread.Content) {
+		t.Fatalf("new occupant read a message addressed to the previous one:\n%s", inbox)
+	}
+	writeAgentState(t, "%19", "platform-session")
+	own := CheckMessagesHandler("platform-frontend/claude_02")
+	if !strings.Contains(own, unread.Content) {
+		t.Fatalf("addressed agent did not receive its message:\n%s", own)
 	}
 }

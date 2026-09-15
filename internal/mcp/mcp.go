@@ -32,8 +32,10 @@ type Message struct {
 	ID           string  `json:"id"`
 	FromSession  string  `json:"from_session"`
 	FromPaneID   string  `json:"from_pane_id,omitempty"`
+	FromAgentID  string  `json:"from_agent_id,omitempty"`
 	ToSession    string  `json:"to_session"`
 	ToPaneID     string  `json:"to_pane_id,omitempty"`
+	ToAgentID    string  `json:"to_agent_id,omitempty"`
 	Content      string  `json:"content"`
 	ExpectsReply bool    `json:"expects_reply"`
 	Status       string  `json:"status"`   // pending, delivered, read, or completed

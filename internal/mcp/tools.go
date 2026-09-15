@@ -50,8 +50,9 @@ func waitingMessageCount(session models.Session) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	name, paneID, agentID := instanceOf(session)
 	count := 0
-	for _, message := range inbox {
+	for _, message := range forInstance(inbox, name, paneID, agentID) {
 		if message.Status == StatusPending || message.Status == StatusDelivered {
 			count++
 		}
@@ -76,12 +77,15 @@ func SendMessageHandler(mySession string, input SendMessageInput) string {
 			input.Target, models.StatusLabel(session.Status))
 	}
 
+	myPaneID, myAgentID := agentInstance()
 	msg := Message{
 		ID:           NewMessageID(),
 		FromSession:  mySession,
-		FromPaneID:   os.Getenv("TMUX_PANE"),
+		FromPaneID:   myPaneID,
+		FromAgentID:  myAgentID,
 		ToSession:    input.Target,
 		ToPaneID:     session.PaneID,
+		ToAgentID:    agentIDForPane(session.PaneID),
 		Content:      input.Message,
 		ExpectsReply: false,
 		Status:       StatusPending,
@@ -123,12 +127,15 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 			input.Target, models.StatusLabel(session.Status))
 	}
 
+	myPaneID, myAgentID := agentInstance()
 	msg := Message{
 		ID:           NewMessageID(),
 		FromSession:  mySession,
-		FromPaneID:   os.Getenv("TMUX_PANE"),
+		FromPaneID:   myPaneID,
+		FromAgentID:  myAgentID,
 		ToSession:    input.Target,
 		ToPaneID:     session.PaneID,
+		ToAgentID:    agentIDForPane(session.PaneID),
 		Content:      input.Message,
 		ExpectsReply: true,
 		Status:       StatusPending,
@@ -207,10 +214,12 @@ func CheckMessagesHandler(mySession string) string {
 	var parts []string
 
 	// Incoming messages (my inbox)
-	inbox, err := ListInboxFor(mySession, os.Getenv("TMUX_PANE"))
+	myPaneID, myAgentID := agentInstance()
+	inbox, err := ListInboxFor(mySession, myPaneID)
 	if err != nil {
 		return fmt.Sprintf("Error reading inbox: %v", err)
 	}
+	inbox = forInstance(inbox, mySession, myPaneID, myAgentID)
 
 	// Unread: pending or delivered (not yet seen)
 	var unread []Message
@@ -258,13 +267,8 @@ func CheckMessagesHandler(mySession string) string {
 		parts = append(parts, fmt.Sprintf("WARNING: outgoing message state unavailable: %v", err))
 	} else {
 		var outgoing, responses []Message
-		myPaneID := os.Getenv("TMUX_PANE")
 		for _, message := range allMessages {
-			fromCurrentAgent := message.FromSession == mySession
-			if myPaneID != "" && message.FromPaneID != "" {
-				fromCurrentAgent = message.FromPaneID == myPaneID
-			}
-			if !fromCurrentAgent {
+			if !message.sentBy(mySession, myPaneID, myAgentID) {
 				continue
 			}
 			switch {
@@ -296,6 +300,12 @@ func CheckMessagesHandler(mySession string) string {
 			}
 		}
 		if len(responses) > 0 {
+			sort.Slice(responses, func(i, j int) bool {
+				return responses[i].CreatedAt > responses[j].CreatedAt
+			})
+			if len(responses) > 10 {
+				responses = responses[:10]
+			}
 			parts = append(parts, "=== Responses to Your Messages ===")
 			for _, message := range responses {
 				parts = append(parts, fmt.Sprintf("Response from %s to message %s:\n%s",

@@ -190,8 +190,20 @@ func (s *Service) Archive(store *tickets.Store, ticketID string) error {
 	if err != nil {
 		return err
 	}
-	if attempt.State != attempts.StateSubmitted {
-		return fmt.Errorf("attempt is %s, not submitted", attempt.State)
+	// A submitted attempt is the agent reporting it finished. A Done ticket is
+	// the human reporting the same thing, and it is the more authoritative of
+	// the two: work an agent started is often finished by hand, and that ticket
+	// could otherwise never be closed out — its worktree stayed forever because
+	// the agent that stopped early never called submit_ticket.
+	//
+	// Every guard that protects work is unchanged: the agent pane must be gone,
+	// the path must be one Nagare manages, the repository must match, and the
+	// removal is non-force so Git itself refuses while anything is uncommitted.
+	switch attempt.State {
+	case attempts.StateArchived:
+		return fmt.Errorf("attempt is already archived")
+	case attempts.StateProvisioning:
+		return fmt.Errorf("attempt is still provisioning its worktree")
 	}
 	if tmux.PaneExists(attempt.PaneID) {
 		return fmt.Errorf("agent pane is still running; close it before archiving")

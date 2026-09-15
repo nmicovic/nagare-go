@@ -156,10 +156,18 @@ creation deliberately leaves the branch and worktree intact. Reconciliation may
 mark a missing running worktree failed and make its ticket retryable, but never
 deletes anything.
 
-`c` archives only a done, submitted attempt after its agent pane has closed.
+`c` archives a done ticket's worktree once its agent pane has closed. The attempt
+need not have been submitted: an agent that stops early never calls
+`submit_ticket`, and its work is then finished, merged, and marked Done by hand —
+a Done ticket is the human saying what a submitted attempt says, and it is the
+more authoritative of the two. Without this such a ticket could never be closed
+out, and removing its worktree by hand made reconciliation rewind the finished
+ticket to Ready. Only an already archived or still provisioning attempt is
+refused.
+
 Archive verifies the path is below Nagare's managed root, verifies the repository,
-and calls the existing non-force dirty-guarded removal. The attempt branch and its
-commits are always retained. A ticket with an active managed attempt cannot be
+and calls the existing non-force dirty-guarded removal, so uncommitted work still
+blocks it. The attempt branch and its commits are always retained. A ticket with an active managed attempt cannot be
 deleted.
 
 ### Submitting text to an agent

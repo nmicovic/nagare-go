@@ -353,3 +353,82 @@ func TestDeliveryWaitsForTheAgentButNeverResendsAPersistedMessage(t *testing.T) 
 		t.Fatalf("sends = %d, want a persisted message to be sent exactly once", sends)
 	}
 }
+
+func TestArchiveClosesOutATicketFinishedByHand(t *testing.T) {
+	// An agent that stops early never calls submit_ticket, so its attempt stays
+	// "running" while the human finishes the work, merges it, and moves the
+	// ticket to Done. Without this the managed worktree could never be cleaned
+	// up from the board: archive refused, and removing it by hand made
+	// Reconcile rewind the finished ticket to Ready.
+	repo := initMainRepo(t)
+	base, err := git.ResolveBaseCommit(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot := t.TempDir()
+	worktreePath := filepath.Join(workspaceRoot, "attempt", "repo")
+	branch := "nagare/unsubmitted"
+	if err := git.AddManagedWorktree(repo, worktreePath, branch, base); err != nil {
+		t.Fatal(err)
+	}
+	attemptStore := attempts.NewStore(t.TempDir())
+	attempt, err := attemptStore.Create(attempts.CreateInput{TicketID: "ticket", Agent: "claude", ProjectPath: repo, TargetBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attemptStore.Update(attempt.ID, func(current *attempts.Attempt) error {
+		current.State = attempts.StateRunning
+		current.BaseCommit = base
+		current.Branch = branch
+		current.WorktreePath = worktreePath
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ticketStore := tickets.NewStore(t.TempDir())
+	ticket, err := ticketStore.Create(tickets.CreateInput{Title: "Merged by hand", ProjectPath: repo, TargetBranch: "main", Status: tickets.StatusDone, Priority: tickets.PriorityMedium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ticketStore.Update(ticket.ID, func(current *tickets.Ticket) error {
+		current.ActiveAttemptID = attempt.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(attemptStore, nil, nil)
+	service.workspaceRoot = workspaceRoot
+
+	// Uncommitted work is still protected: the human's Done is about the merge,
+	// not about whatever is lying in the worktree.
+	dirty := filepath.Join(worktreePath, "dirty.txt")
+	if err := os.WriteFile(dirty, []byte("wip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Archive(ticketStore, ticket.ID); err == nil {
+		t.Fatal("Archive() removed a dirty worktree for an unsubmitted attempt")
+	}
+	if err := os.Remove(dirty); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Archive(ticketStore, ticket.ID); err != nil {
+		t.Fatalf("Archive() = %v for a done ticket whose agent never submitted", err)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatal("clean worktree still exists")
+	}
+	out, err := exec.Command("git", "-C", repo, "branch", "--list", branch).Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		t.Fatalf("attempt branch was lost: %q, %v", out, err)
+	}
+	archived, err := attemptStore.Get(attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.State != attempts.StateArchived || archived.ArchivedAt == nil {
+		t.Fatalf("archived attempt = %#v", archived)
+	}
+	if err := service.Archive(ticketStore, ticket.ID); err == nil {
+		t.Fatal("Archive() ran twice on one attempt")
+	}
+}

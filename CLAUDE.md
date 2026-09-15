@@ -180,14 +180,31 @@ and the failure is silent in the worst way — the ticket sits unsent in the
 agent's prompt while the board reports the work handed off and the agent
 running.
 
-`tmux.SubmitPrompt` therefore has the agent confirm the submit rather than
-assuming it. It types the text, then resends Enter — 250ms, 500ms, 1s — until
-the agent's own hook state file for that pane changes, which is exactly what
-accepting a prompt does (`UserPromptSubmit` and its per-agent spellings). An
-agent that reports no state at all, which is Crush, has nothing to confirm
-against and keeps a single best-effort Enter rather than guessing at another
-TUI's input. Both delivery paths use it: `mcp.sendNudge` for the mailbox notice
-and `session.SendPromptToPane` for the orchestrator's direct fallback.
+Worse, a pane running an agent is not an agent ready to be typed at. Claude
+Code opens a directory it has not seen — which every managed worktree is — by
+asking whether the folder is trusted, and waits there **indefinitely**, running
+no hooks at all. Text typed at that dialog is discarded, and the Enter after it
+answers the highlighted default, which is *No, exit*. The old blind send
+therefore killed the agent it had just launched for the ticket, and the board
+went on showing the ticket as running. Verified against a real pane, not
+reasoned about.
+
+`tmux.SubmitPrompt` therefore does two things. It types nothing until the agent
+has reported itself through its hooks — which it cannot do while that dialog is
+up, making the hook state the exact readiness signal — waiting up to a minute,
+so answering the prompt lets delivery proceed on its own, and otherwise failing
+with a message that names the trust prompt. Then it confirms the submit rather
+than assuming it: Enter is resent — 250ms, 500ms, 1s, 2s — until the agent's own
+state file changes, which is what accepting a prompt does (`UserPromptSubmit`
+and its per-agent spellings).
+
+`Submit.NotBefore` discards state older than the launch, because a pane keeps
+the state files of every agent that has run in it and a previous occupant's
+must not read as readiness. An agent that reports no state at all, which is
+Crush (`models.ReportsStatus`), has nothing to wait for or confirm against and
+keeps a single best-effort Enter rather than guessing at another TUI's input.
+Both delivery paths use it: `mcp.sendNudge` for the mailbox notice and
+`session.SendPromptToPane` for the orchestrator's direct fallback.
 
 A stall is reported instead of swallowed, and the text is deliberately left in
 the agent's prompt so it can be submitted by hand. Because the message file is

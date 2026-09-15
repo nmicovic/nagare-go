@@ -6,9 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
+	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
@@ -42,13 +44,20 @@ func ValidateAgent(agent string) error {
 	return nil
 }
 
-// SendPromptToPane submits literal text to an already started agent TUI and
-// waits for the agent to report that it accepted the prompt.
-func SendPromptToPane(paneID, prompt string) error {
+// SendPromptToPane submits literal text to an agent TUI once that agent is
+// listening, and waits for it to report that it accepted the prompt. Anything
+// typed earlier goes to the agent's startup — for a new worktree, to Claude
+// Code's trust dialog, where the Enter after it answers "No, exit".
+func SendPromptToPane(paneID, prompt, agent string, startedAt time.Time) error {
 	if strings.TrimSpace(paneID) == "" {
 		return fmt.Errorf("pane ID is empty")
 	}
-	return tmux.SubmitPrompt(paneID, prompt)
+	return tmux.SubmitPrompt(tmux.Submit{
+		Target:    paneID,
+		Text:      prompt,
+		Reports:   models.ReportsStatus(models.AgentType(agent)),
+		NotBefore: startedAt,
+	})
 }
 
 // LaunchManagedWorktree creates an explicitly based worktree and starts an agent

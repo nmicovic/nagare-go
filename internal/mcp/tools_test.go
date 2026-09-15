@@ -102,10 +102,10 @@ func TestDeliverMessageSurvivesImmediateCheckAndDisplayNameChanges(t *testing.T)
 		WindowIndex: 1, PaneIndex: 0, PaneID: "%backend",
 	}
 	notified := false
-	err := deliverMessage(session, msg, "urgent notice", func(paneTarget, notice string) error {
+	err := deliverMessage(session, msg, "urgent notice", func(target models.Session, notice string) error {
 		notified = true
-		if paneTarget != "cosmic-platform-backend:1.0" || notice != "urgent notice" {
-			t.Fatalf("nudge = %q, %q", paneTarget, notice)
+		if paneTargetFor(target) != "cosmic-platform-backend:1.0" || notice != "urgent notice" {
+			t.Fatalf("nudge = %q, %q", paneTargetFor(target), notice)
 		}
 		// Simulate the target reacting immediately after its display name changed.
 		inbox := CheckMessagesHandler(targetAfterRename)
@@ -153,7 +153,7 @@ func TestDeliverMessageNeverNudgesWhenPersistenceFails(t *testing.T) {
 	notified := false
 	err := deliverMessage(models.Session{}, Message{
 		ID: "write-fails", ToSession: "backend",
-	}, "notice", func(string, string) error {
+	}, "notice", func(models.Session, string) error {
 		notified = true
 		return nil
 	})
@@ -168,7 +168,7 @@ func TestDeliverMessageNeverNudgesWhenPersistenceFails(t *testing.T) {
 func TestDeliverMessageRetainsInboxRecordWhenNudgeFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	msg := Message{ID: "notify-fails", ToSession: "backend", Status: StatusPending}
-	err := deliverMessage(models.Session{}, msg, "notice", func(string, string) error {
+	err := deliverMessage(models.Session{}, msg, "notice", func(models.Session, string) error {
 		return errors.New("pane disappeared")
 	})
 	if err == nil || !strings.Contains(err.Error(), "was saved") {

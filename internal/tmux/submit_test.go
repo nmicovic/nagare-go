@@ -56,11 +56,14 @@ exit 0
 
 	// Real waits would make every case a multi-second test; the sequencing they
 	// guard is what is under test, not their length.
-	waits, confirm, poll := submitWaits, submitConfirm, submitPoll
-	t.Cleanup(func() { submitWaits, submitConfirm, submitPoll = waits, confirm, poll })
+	waits, confirm, poll, ready := submitWaits, submitConfirm, submitPoll, submitReady
+	t.Cleanup(func() {
+		submitWaits, submitConfirm, submitPoll, submitReady = waits, confirm, poll, ready
+	})
 	submitWaits = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	submitConfirm = 40 * time.Millisecond
 	submitPoll = 5 * time.Millisecond
+	submitReady = 60 * time.Millisecond
 
 	return func() []string {
 		data, err := os.ReadFile(calls)
@@ -73,7 +76,13 @@ exit 0
 
 func writeAgentState(t *testing.T, dir, event, status string) {
 	t.Helper()
-	body := `{"state":"` + status + `","session_id":"s","cwd":"/repo","pane_id":"%42","event":"` + event + `","timestamp":"2026-09-15T10:00:00Z"}`
+	writeState(t, dir, event, status, time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC))
+}
+
+func writeState(t *testing.T, dir, event, status string, at time.Time) {
+	t.Helper()
+	body := `{"state":"` + status + `","session_id":"s","cwd":"/repo","pane_id":"%42","event":"` + event +
+		`","timestamp":"` + at.UTC().Format(time.RFC3339) + `"}`
 	if err := os.WriteFile(filepath.Join(dir, "s.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +100,7 @@ func enters(calls []string) int {
 
 func TestSubmitPromptStopsAtTheEnterTheAgentAccepts(t *testing.T) {
 	log, _ := submitHarness(t, 1, true)
-	if err := SubmitPrompt("%42", "check_messages()"); err != nil {
+	if err := SubmitPrompt(Submit{Target: "%42", Text: "check_messages()", Reports: true}); err != nil {
 		t.Fatalf("SubmitPrompt() = %v", err)
 	}
 	calls := log()
@@ -107,7 +116,7 @@ func TestSubmitPromptResendsEnterUntilTheAgentTakesThePrompt(t *testing.T) {
 	// The reported bug: the agent's input debounce swallowed the first Enter and
 	// the notice sat in its prompt while nagare called the ticket delivered.
 	log, _ := submitHarness(t, 2, true)
-	if err := SubmitPrompt("board:0.1", "URGENT: message 1234 requires attention."); err != nil {
+	if err := SubmitPrompt(Submit{Target: "board:0.1", Text: "URGENT: message 1234 requires attention.", Reports: true}); err != nil {
 		t.Fatalf("SubmitPrompt() = %v", err)
 	}
 	calls := log()
@@ -127,7 +136,7 @@ func TestSubmitPromptResendsEnterUntilTheAgentTakesThePrompt(t *testing.T) {
 
 func TestSubmitPromptReportsAPromptTheAgentNeverAccepted(t *testing.T) {
 	log, _ := submitHarness(t, 0, true)
-	err := SubmitPrompt("%42", "URGENT: message 1234 requires attention.")
+	err := SubmitPrompt(Submit{Target: "%42", Text: "URGENT: message 1234 requires attention.", Reports: true})
 	if err == nil {
 		t.Fatal("SubmitPrompt() = nil for a prompt that was never accepted")
 	}
@@ -145,7 +154,7 @@ func TestSubmitPromptDoesNotGuessForAnAgentThatReportsNoState(t *testing.T) {
 	// Crush installs no status reporting, so there is nothing to confirm
 	// against and a resent Enter would be a guess at another agent's input.
 	log, _ := submitHarness(t, 0, false)
-	if err := SubmitPrompt("%42", "hello"); err != nil {
+	if err := SubmitPrompt(Submit{Target: "%42", Text: "hello", Reports: false}); err != nil {
 		t.Fatalf("SubmitPrompt() = %v", err)
 	}
 	if got := enters(log()); got != 1 {
@@ -154,7 +163,69 @@ func TestSubmitPromptDoesNotGuessForAnAgentThatReportsNoState(t *testing.T) {
 }
 
 func TestSubmitPromptRejectsAnEmptyTarget(t *testing.T) {
-	if err := SubmitPrompt("  ", "text"); err == nil {
+	if err := SubmitPrompt(Submit{Target: "  ", Text: "text", Reports: true}); err == nil {
 		t.Fatal("SubmitPrompt() = nil for an empty target")
+	}
+}
+
+func TestSubmitPromptTypesNothingAtAnAgentThatIsNotListening(t *testing.T) {
+	// Claude Code opens an untrusted directory — which every managed worktree
+	// is — with a trust dialog, and waits there indefinitely without running a
+	// single hook. Text typed at that dialog is discarded and the Enter after
+	// it answers the highlighted "No, exit", killing the agent just launched
+	// for the ticket. So an agent that has not reported itself is not typed at.
+	log, _ := submitHarness(t, 1, false)
+	err := SubmitPrompt(Submit{Target: "%42", Text: "you have been assigned a ticket", Reports: true})
+	if err == nil {
+		t.Fatal("SubmitPrompt() = nil for an agent that never started listening")
+	}
+	if !strings.Contains(err.Error(), "trust the folder") {
+		t.Errorf("error does not name the likely cause: %v", err)
+	}
+	if calls := log(); len(calls) > 0 {
+		for _, call := range calls {
+			if strings.HasPrefix(call, "send-keys") {
+				t.Fatalf("typed at an agent that was not listening:\n%s", strings.Join(calls, "\n"))
+			}
+		}
+	}
+}
+
+func TestSubmitPromptWaitsForAStartingAgentThenSubmits(t *testing.T) {
+	log, home := submitHarness(t, 1, false)
+	states := filepath.Join(home, ".local", "share", "nagare", "states")
+	go func() {
+		// The user answers the trust prompt; the agent starts and reports.
+		time.Sleep(15 * time.Millisecond)
+		writeState(t, states, "SessionStart", "idle", time.Now())
+	}()
+	submitReady = time.Second
+	if err := SubmitPrompt(Submit{Target: "%42", Text: "ticket", Reports: true}); err != nil {
+		t.Fatalf("SubmitPrompt() = %v", err)
+	}
+	if got := enters(log()); got != 1 {
+		t.Fatalf("enters = %d, want 1 once the agent was listening", got)
+	}
+}
+
+func TestSubmitPromptIgnoresAPreviousOccupantsState(t *testing.T) {
+	// A pane keeps the state files of every agent that has run in it, so a
+	// launch must not read the last occupant's as the new agent's readiness.
+	log, home := submitHarness(t, 1, false)
+	states := filepath.Join(home, ".local", "share", "nagare", "states")
+	writeState(t, states, "Stop", "idle", time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC))
+	err := SubmitPrompt(Submit{
+		Target:    "%42",
+		Text:      "ticket",
+		Reports:   true,
+		NotBefore: time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("SubmitPrompt() = nil while only the previous occupant had reported")
+	}
+	for _, call := range log() {
+		if strings.HasPrefix(call, "send-keys") {
+			t.Fatal("typed into a pane whose new agent had not reported")
+		}
 	}
 }

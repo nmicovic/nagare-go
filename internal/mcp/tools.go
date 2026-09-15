@@ -349,8 +349,10 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 
 // Helper functions
 
-// nudgeFunc submits a persisted-message notice to an agent pane.
-type nudgeFunc func(paneTarget, text string) error
+// nudgeFunc submits a persisted-message notice to an agent pane. It takes the
+// whole session because delivery depends on the agent: only an agent that
+// reports status can confirm that it took the notice.
+type nudgeFunc func(target models.Session, text string) error
 
 // MessagePersistedMarker appears in every error a send returns after the
 // message file has been written. A caller retrying a send must stop once it
@@ -365,7 +367,7 @@ func deliverMessage(session models.Session, message Message, nudge string, notif
 	if err := WriteMessage(message); err != nil {
 		return fmt.Errorf("writing message: %w", err)
 	}
-	if err := notify(paneTargetFor(session), nudge); err != nil {
+	if err := notify(session, nudge); err != nil {
 		return fmt.Errorf("message %s was saved, but target notification failed: %w", message.ID, err)
 	}
 	stored, err := ReadStoredMessage(message)
@@ -385,8 +387,12 @@ func deliverMessage(session models.Session, message Message, nudge string, notif
 // sendNudge submits a notice to an agent pane and waits for that agent to
 // report that it took it, so a notice left sitting in the input buffer is
 // reported as a delivery failure instead of passing as delivered.
-func sendNudge(paneTarget, text string) error {
-	return tmux.SubmitPrompt(paneTarget, text)
+func sendNudge(target models.Session, text string) error {
+	return tmux.SubmitPrompt(tmux.Submit{
+		Target:  paneTargetFor(target),
+		Text:    text,
+		Reports: models.ReportsStatus(target.AgentType),
+	})
 }
 
 // paneTargetFor builds a tmux pane target for a discovered session. It uses

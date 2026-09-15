@@ -146,7 +146,7 @@ func TestDeliveryFailureKeepsStartedAttemptRunningAndRecoverable(t *testing.T) {
 			return session.ManagedWorktree{DisplayName: "repo/attempt", PaneID: "%8"}, nil
 		},
 		func(string, string) error { return errors.New("mailbox unavailable") })
-	service.direct = func(string, string) error { return errors.New("pane unavailable") }
+	service.direct = func(string, string, string, time.Time) error { return errors.New("pane unavailable") }
 	service.workspaceRoot = t.TempDir()
 
 	attempt, err := service.Start(ticketStore, ticket.ID, session.AgentSpec{Agent: "codex"})

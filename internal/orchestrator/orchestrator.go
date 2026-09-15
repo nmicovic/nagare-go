@@ -23,12 +23,18 @@ type LaunchFunc func(repoPath, worktreePath, windowName, branch, baseCommit stri
 // DeliverFunc delivers the ticket contract to the newly started agent.
 type DeliverFunc func(target, message string) error
 
+// DirectFunc types the contract straight into the agent's pane when the
+// mailbox notice could not be delivered. It takes the agent and the moment the
+// pane was launched, because it must wait for that agent to start listening
+// and must not mistake a previous occupant's hook state for readiness.
+type DirectFunc func(paneID, message, agent string, startedAt time.Time) error
+
 // Service owns ticket attempt provisioning and conservative cleanup.
 type Service struct {
 	attempts      *attempts.Store
 	launch        LaunchFunc
 	deliver       DeliverFunc
-	direct        DeliverFunc
+	direct        DirectFunc
 	pullRequest   PullRequestFunc
 	workspaceRoot string
 }
@@ -162,7 +168,7 @@ func (s *Service) Start(store *tickets.Store, ticketID string, spec session.Agen
 	}
 	prompt := AssignmentPrompt(ticket)
 	if err := s.deliver(managed.DisplayName, prompt); err != nil {
-		if directErr := s.direct(managed.PaneID, prompt); directErr != nil {
+		if directErr := s.direct(managed.PaneID, prompt, spec.Agent, now); directErr != nil {
 			combined := fmt.Errorf("mailbox delivery failed: %v; direct delivery failed: %w", err, directErr)
 			_, _ = s.attempts.Update(attempt.ID, func(current *attempts.Attempt) error {
 				current.LastError = combined.Error()

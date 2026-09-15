@@ -342,6 +342,11 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 // nudgeFunc submits a persisted-message notice to an agent pane.
 type nudgeFunc func(paneTarget, text string) error
 
+// MessagePersistedMarker appears in every error a send returns after the
+// message file has been written. A caller retrying a send must stop once it
+// sees this: the mailbox entry exists, and only the pane notice failed.
+const MessagePersistedMarker = "was saved"
+
 // deliverMessage persists before notifying so an immediate inbox check cannot
 // race the file. It records notification only if the target has not already
 // advanced the message to read or completed.
@@ -367,16 +372,11 @@ func deliverMessage(session models.Session, message Message, nudge string, notif
 	return nil
 }
 
-// sendNudge sends a text nudge then Enter to a tmux pane as two separate
-// send-keys calls. Agent TUIs debounce input; one burst can leave Enter as a
-// newline inside the input buffer instead of submitting the notice.
+// sendNudge submits a notice to an agent pane and waits for that agent to
+// report that it took it, so a notice left sitting in the input buffer is
+// reported as a delivery failure instead of passing as delivered.
 func sendNudge(paneTarget, text string) error {
-	if _, err := tmux.RunStrict("send-keys", "-t", paneTarget, "-l", text); err != nil {
-		return err
-	}
-	time.Sleep(50 * time.Millisecond)
-	_, err := tmux.RunStrict("send-keys", "-t", paneTarget, "Enter")
-	return err
+	return tmux.SubmitPrompt(paneTarget, text)
 }
 
 // paneTargetFor builds a tmux pane target for a discovered session. It uses

@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
@@ -43,17 +42,13 @@ func ValidateAgent(agent string) error {
 	return nil
 }
 
-// SendPromptToPane submits literal text to an already started agent TUI.
+// SendPromptToPane submits literal text to an already started agent TUI and
+// waits for the agent to report that it accepted the prompt.
 func SendPromptToPane(paneID, prompt string) error {
 	if strings.TrimSpace(paneID) == "" {
 		return fmt.Errorf("pane ID is empty")
 	}
-	if _, err := tmux.RunStrict("send-keys", "-t", paneID, "-l", prompt); err != nil {
-		return err
-	}
-	time.Sleep(50 * time.Millisecond)
-	_, err := tmux.RunStrict("send-keys", "-t", paneID, "Enter")
-	return err
+	return tmux.SubmitPrompt(paneID, prompt)
 }
 
 // LaunchManagedWorktree creates an explicitly based worktree and starts an agent

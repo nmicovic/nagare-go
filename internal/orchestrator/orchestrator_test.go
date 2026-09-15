@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nemke/nagare-go/internal/attempts"
 	"github.com/nemke/nagare-go/internal/git"
@@ -316,5 +317,39 @@ func TestManagedPathRejectsAnythingOutsideOwnedRoot(t *testing.T) {
 	}
 	if err := managedPath(root, root); err == nil {
 		t.Fatal("workspace root accepted as removable worktree")
+	}
+}
+
+func TestDeliveryWaitsForTheAgentButNeverResendsAPersistedMessage(t *testing.T) {
+	var sends int
+	err := deliverWith("repo/attempt", "ticket", 2*time.Second, time.Millisecond,
+		func(string, string) string {
+			sends++
+			if sends < 3 {
+				return "Error: repo/attempt is WORKING, not idle. Wait for it to finish."
+			}
+			return "Message 1234 was saved and its notification was submitted to repo/attempt."
+		})
+	if err != nil {
+		t.Fatalf("deliverWith() = %v", err)
+	}
+	if sends != 3 {
+		t.Fatalf("sends = %d, want the wait to retry until the agent is idle", sends)
+	}
+
+	// A notice that stalls in the agent's input must not be sent again: the
+	// message file already exists, so a resend would duplicate the ticket in
+	// the mailbox instead of re-notifying about the one already there.
+	sends = 0
+	err = deliverWith("repo/attempt", "ticket", 2*time.Second, time.Millisecond,
+		func(string, string) string {
+			sends++
+			return "Error: message 1234 was saved, but target notification failed: pane %8 took the text but the agent did not report accepting it"
+		})
+	if err == nil {
+		t.Fatal("deliverWith() = nil for a stalled notification")
+	}
+	if sends != 1 {
+		t.Fatalf("sends = %d, want a persisted message to be sent exactly once", sends)
 	}
 }

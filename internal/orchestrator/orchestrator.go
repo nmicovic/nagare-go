@@ -296,17 +296,33 @@ func (s *Service) markFailed(id string, cause error) {
 	})
 }
 
+// deliverWhenReady retries while the target is not yet a registered idle agent:
+// a freshly launched pane needs a moment to report itself.
 func deliverWhenReady(target, message string) error {
-	deadline := time.Now().Add(45 * time.Second)
+	return deliverWith(target, message, 45*time.Second, 250*time.Millisecond, func(to, body string) string {
+		return mcp.SendMessageHandler("nagare-board", mcp.SendMessageInput{Target: to, Message: body})
+	})
+}
+
+func deliverWith(target, message string, window, gap time.Duration, send func(string, string) string) error {
+	deadline := time.Now().Add(window)
 	var last string
-	for time.Now().Before(deadline) {
-		last = mcp.SendMessageHandler("nagare-board", mcp.SendMessageInput{Target: target, Message: message})
+	for {
+		last = send(target, message)
 		if !strings.HasPrefix(last, "Error") {
 			return nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		if strings.Contains(last, mcp.MessagePersistedMarker) {
+			// The mailbox entry exists and only the pane notice failed. Sending
+			// again would write a second copy of the same ticket, so hand the
+			// failure to the direct fallback instead.
+			return fmt.Errorf("%s", last)
+		}
+		if !time.Now().Add(gap).Before(deadline) {
+			return fmt.Errorf("%s", last)
+		}
+		time.Sleep(gap)
 	}
-	return fmt.Errorf("%s", last)
 }
 
 func managedPath(workspaceRoot, path string) error {

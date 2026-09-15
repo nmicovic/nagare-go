@@ -162,6 +162,32 @@ and calls the existing non-force dirty-guarded removal. The attempt branch and i
 commits are always retained. A ticket with an active managed attempt cannot be
 deleted.
 
+### Submitting text to an agent
+
+Typing into an agent TUI is not the same as submitting. Every agent debounces
+its input: a burst of literal text is treated as a paste, and an Enter arriving
+inside that window is appended to the buffer as a newline instead of submitting
+it. The 50ms gap that used to separate the two `send-keys` calls was not enough,
+and the failure is silent in the worst way — the ticket sits unsent in the
+agent's prompt while the board reports the work handed off and the agent
+running.
+
+`tmux.SubmitPrompt` therefore has the agent confirm the submit rather than
+assuming it. It types the text, then resends Enter — 250ms, 500ms, 1s — until
+the agent's own hook state file for that pane changes, which is exactly what
+accepting a prompt does (`UserPromptSubmit` and its per-agent spellings). An
+agent that reports no state at all, which is Crush, has nothing to confirm
+against and keeps a single best-effort Enter rather than guessing at another
+TUI's input. Both delivery paths use it: `mcp.sendNudge` for the mailbox notice
+and `session.SendPromptToPane` for the orchestrator's direct fallback.
+
+A stall is reported instead of swallowed, and the text is deliberately left in
+the agent's prompt so it can be submitted by hand. Because the message file is
+written before the notice is sent, `deliverWhenReady` stops retrying as soon as
+an error contains `mcp.MessagePersistedMarker`: the wait exists for a pane that
+has not registered itself yet, and resending after a save would duplicate the
+ticket in the mailbox.
+
 ## Agent Integrations
 
 Every agent reports status through one interface: `nagare-go hook-state` reading a JSON

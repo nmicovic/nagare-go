@@ -91,6 +91,9 @@ type Model struct {
 	archiveMode     bool
 	archiveTicket   tickets.Ticket
 	deleteTicket    tickets.Ticket
+	detailMode      bool
+	detailTicket    tickets.Ticket
+	detailOffset    int
 	reviewMode      bool
 	reviewLoading   bool
 	reviewTicket    tickets.Ticket
@@ -204,6 +207,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = msg.sessions
 		}
 		m.clampCursors()
+		m.syncDetail()
 		if !m.active {
 			return m, nil
 		}
@@ -276,6 +280,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.agentsMode {
 			return m.handleAgentsKey(msg)
 		}
+		if m.detailMode {
+			return m.handleDetailKey(msg)
+		}
 		return m.handleKey(msg)
 	}
 	return m, nil
@@ -343,13 +350,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.guideMode = true
 		m.guidePage = 0
 	case "enter":
-		if ticket, ok := m.selectedTicket(); ok && ticket.AssigneeSession != "" {
-			if assigned, found := m.assignedSession(ticket); found {
-				session.SwitchToPane(assigned)
-				return m, tea.Quit
-			}
-			m.statusErr = "assigned agent is no longer running"
-		}
+		m.startDetail()
 	}
 	return m, nil
 }
@@ -510,6 +511,7 @@ func (m Model) launchRun(agent models.AgentType, model string) (tea.Model, tea.C
 	m.modelMode = false
 	m.modelInput.Blur()
 	m.modelInput.SetValue("")
+	m.closeDetail()
 	m.launching = true
 	m.statusNote = "provisioning isolated worktree..."
 	return m, func() tea.Msg {
@@ -572,6 +574,7 @@ func (m *Model) reload() {
 		m.sessions = scanAgentSessions()
 	}
 	m.clampCursors()
+	m.syncDetail()
 }
 
 func scanAgentSessions() []models.Session {
@@ -895,6 +898,9 @@ func (m Model) view() string {
 		footer = lipgloss.NewStyle().Foreground(colors.Success).Bold(true).
 			Render(ansi.Truncate("✓  "+m.statusNote, m.width, ""))
 	}
+	if m.detailMode {
+		columns = m.renderDetailDialog()
+	}
 	if m.runMode {
 		columns = m.renderRunDialog()
 	}
@@ -965,6 +971,7 @@ func (m Model) renderFooter() string {
 		key("h/l", "lane"),
 		key("1-5", "jump"),
 		key("j/k", "card"),
+		key("enter", "open"),
 		key("[/]", "move"),
 		key("n", "new"),
 		key("x", "delete"),

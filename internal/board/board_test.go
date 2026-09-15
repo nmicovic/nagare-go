@@ -652,3 +652,221 @@ func TestBoardGuideFitsCommonTerminalSizes(t *testing.T) {
 		}
 	}
 }
+
+func detailModel(ticket tickets.Ticket) Model {
+	return Model{
+		tickets:   []tickets.Ticket{ticket},
+		column:    statusIndex(ticket.Status),
+		cursors:   map[tickets.Status]int{ticket.Status: 0},
+		todayOnly: false,
+		width:     110,
+		height:    34,
+	}
+}
+
+func TestEnterOpensTicketDetailWithFullContext(t *testing.T) {
+	created := time.Date(2026, 9, 15, 9, 30, 0, 0, time.UTC)
+	model := detailModel(tickets.Ticket{
+		ID:           "12345678-abcd",
+		Title:        "Teach the board to preview a ticket",
+		Description:  "The card only fits a title, so a ready ticket is dispatched unread.",
+		ProjectPath:  "/home/dev/nagare-go",
+		TargetBranch: "main",
+		Status:       tickets.StatusReady,
+		Priority:     tickets.PriorityHigh,
+		PlannedFor:   "2026-09-15",
+		CreatedAt:    created,
+		UpdatedAt:    created,
+	})
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if cmd != nil {
+		t.Fatal("opening the detail overlay returned a command")
+	}
+	if !model.detailMode || model.detailTicket.ID != "12345678-abcd" {
+		t.Fatalf("detail overlay not opened: %#v", model)
+	}
+
+	overlay := ansi.Strip(model.renderDetailDialog())
+	for _, want := range []string{
+		"READY",
+		"HIGH",
+		"12345678",
+		"Teach the board to preview a ticket",
+		"/home/dev/nagare-go",
+		"main",
+		"2026-09-15",
+		"Unassigned",
+		"DESCRIPTION",
+		"dispatched unread",
+		"enter run",
+	} {
+		if !strings.Contains(overlay, want) {
+			t.Errorf("detail overlay missing %q:\n%s", want, overlay)
+		}
+	}
+}
+
+func TestDetailStartsAttemptAndCancellingReturnsToTheTicket(t *testing.T) {
+	model := detailModel(tickets.Ticket{
+		ID:          "ticket",
+		Title:       "Isolated work",
+		ProjectPath: "/repo",
+		Status:      tickets.StatusReady,
+		Priority:    tickets.PriorityMedium,
+	})
+	model.startDetail()
+
+	next, _ := model.handleDetailKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if !model.runMode || len(model.runAgents) != 7 {
+		t.Fatalf("enter in the detail overlay did not open the agent picker: %#v", model)
+	}
+	if !model.detailMode {
+		t.Fatal("agent picker discarded the ticket it was opened from")
+	}
+
+	next, _ = model.handleRunKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(Model)
+	if model.runMode || !model.detailMode {
+		t.Fatalf("cancelling the agent picker did not return to the ticket: %#v", model)
+	}
+
+	next, _ = model.handleDetailKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	next, _ = model.handleRunKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if !model.modelMode || model.runAgent != models.AgentClaude {
+		t.Fatalf("agent selection did not reach model input: %#v", model)
+	}
+	next, command := model.handleModelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if command == nil || !model.launching {
+		t.Fatalf("model confirmation did not start provisioning: %#v", model)
+	}
+	if model.detailMode {
+		t.Fatal("launching an attempt left the detail overlay open")
+	}
+}
+
+func TestDetailOfARunningTicketReportsAClosedAgentPane(t *testing.T) {
+	model := detailModel(tickets.Ticket{
+		ID:              "ticket",
+		Title:           "Already running",
+		ProjectPath:     "/repo",
+		Status:          tickets.StatusRunning,
+		Priority:        tickets.PriorityMedium,
+		AssigneeSession: "claude_01",
+		AssigneeAgent:   string(models.AgentClaude),
+		ActiveAttemptID: "attempt",
+	})
+	model.startDetail()
+
+	overlay := ansi.Strip(model.renderDetailDialog())
+	for _, want := range []string{"RUNNING", "claude_01", "pane closed", "attempt", "enter jump to agent"} {
+		if !strings.Contains(overlay, want) {
+			t.Errorf("running detail overlay missing %q:\n%s", want, overlay)
+		}
+	}
+
+	next, cmd := model.handleDetailKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(Model)
+	if cmd != nil {
+		t.Fatal("a closed pane was still jumped to")
+	}
+	if !strings.Contains(model.statusErr, "no longer running") {
+		t.Fatalf("status error = %q", model.statusErr)
+	}
+	if !model.detailMode {
+		t.Fatal("a failed jump closed the detail overlay")
+	}
+}
+
+func TestDetailDropsATicketDeletedWhileItIsOpen(t *testing.T) {
+	model := detailModel(tickets.Ticket{
+		ID: "ticket", Title: "Vanishes", Status: tickets.StatusReady, Priority: tickets.PriorityMedium,
+	})
+	model.startDetail()
+	model.tickets = nil
+	model.syncDetail()
+	if model.detailMode {
+		t.Fatal("detail overlay survived its ticket")
+	}
+}
+
+func TestDetailOverlayFitsCommonTerminalSizes(t *testing.T) {
+	long := strings.Repeat("A ticket description that must wrap and then scroll. ", 20)
+	for _, size := range []struct {
+		width  int
+		height int
+	}{
+		{width: 200, height: 50},
+		{width: 110, height: 34},
+		{width: 80, height: 26},
+		{width: 60, height: 20},
+		{width: 46, height: 16},
+	} {
+		model := detailModel(tickets.Ticket{
+			ID:           "12345678-abcd",
+			Title:        "A title long enough to wrap inside a narrow overlay box",
+			Description:  long,
+			ProjectPath:  "/home/dev/some/deeply/nested/repository/checkout",
+			TargetBranch: "main",
+			Status:       tickets.StatusReady,
+			Priority:     tickets.PriorityMedium,
+		})
+		model.width, model.height = size.width, size.height
+		model.startDetail()
+
+		rendered := model.renderDetailDialog()
+		if got, limit := lipgloss.Height(rendered), max(8, size.height-4); got > limit {
+			t.Errorf("%dx%d detail height = %d, exceeds %d", size.width, size.height, got, limit)
+		}
+		for lineNumber, line := range strings.Split(rendered, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Errorf("%dx%d line %d width = %d", size.width, size.height, lineNumber, got)
+			}
+		}
+		if frame := lipgloss.Height(model.view()); frame > size.height {
+			t.Errorf("%dx%d frame height = %d", size.width, size.height, frame)
+		}
+		plain := ansi.Strip(rendered)
+		if !strings.Contains(plain, "esc close") {
+			t.Errorf("%dx%d overlay trimmed away its exit key:\n%s", size.width, size.height, plain)
+		}
+		lines := model.detailLines(model.detailInnerWidth())
+		clipped := len(lines) > model.detailPage(len(lines))
+		if counted := strings.Contains(plain, fmt.Sprintf("/ %d", len(lines))); counted != clipped {
+			t.Errorf("%dx%d scroll counter shown = %v, clipped = %v:\n%s", size.width, size.height, counted, clipped, plain)
+		}
+	}
+}
+
+func TestDetailScrollsByRenderedRows(t *testing.T) {
+	model := detailModel(tickets.Ticket{
+		ID: "ticket", Title: "Scroll me", Status: tickets.StatusReady, Priority: tickets.PriorityMedium,
+		Description: strings.Repeat("Wrapped body text that keeps going. ", 40),
+	})
+	model.height = 24
+	model.startDetail()
+
+	lines := model.detailLines(model.detailInnerWidth())
+	page := model.detailPage(len(lines))
+	if page >= len(lines) {
+		t.Fatalf("test ticket does not overflow: %d lines, page %d", len(lines), page)
+	}
+	next, _ := model.handleDetailKey(tea.KeyPressMsg{Code: tea.KeyEnd})
+	model = next.(Model)
+	if got, want := model.detailOffset, len(lines)-page; got != want {
+		t.Fatalf("end offset = %d, want %d", got, want)
+	}
+	next, _ = model.handleDetailKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if got := next.(Model).detailOffset; got != len(lines)-page {
+		t.Fatalf("page down past the end = %d", got)
+	}
+	next, _ = model.handleDetailKey(tea.KeyPressMsg{Code: tea.KeyHome})
+	if got := next.(Model).detailOffset; got != 0 {
+		t.Fatalf("home offset = %d", got)
+	}
+}

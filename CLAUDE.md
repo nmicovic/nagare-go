@@ -118,6 +118,24 @@ waiting worktree lifts its whole repo. Rows are derived per frame by
 
 ### Ticket orchestration
 
+Enter opens the selected ticket's detail overlay, which is the board's reading
+view: the card holds two lines, so a ready ticket was otherwise dispatched
+unread. The overlay shows the description, repository, target branch, dates,
+assignee with its live pane status, attempt ID, PR, and any submitted agent
+report, and Enter there runs the ticket's one implied action — start an
+isolated attempt from backlog or ready, jump to the agent pane while it runs.
+The agent picker is drawn over the overlay rather than replacing it, so
+cancelling with esc returns to the ticket. `syncDetail` re-reads the open
+ticket on every board refresh and closes the overlay if the ticket is gone,
+because the board reloads every second while an agent works.
+
+The overlay windows its body by *rendered* rows: `detailField` truncates its
+label rather than wrapping it — a wrapped label smuggles a newline into a row
+the viewport counts as one — and `detailPage` budgets against a measured empty
+box (`detailBox(nil)`), not against assumed border and padding arithmetic. The
+hint bar reserves `esc close` and the scroll counter and trims only the
+lane-specific hints.
+
 `d` on a backlog or ready ticket selects an agent, then accepts an optional
 per-session model. Blank input preserves the agent's configured default. Claude,
 Codex, OpenCode, Gemini, pi, and OhMyPi receive `--model`; Crush skips model

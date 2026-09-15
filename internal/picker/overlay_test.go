@@ -305,7 +305,7 @@ func TestOnPlanePreservesForeignBackgrounds(t *testing.T) {
 	const foreign = "48;2;60;60;70"
 	in := "\x1b[" + foreign + "m recap: \x1b[0m tail text"
 
-	out := onPlane(in, theme.Current().Colors.Background)
+	out := theme.OnPlane(in, theme.Current().Colors.Background)
 
 	bgs := cellBackgrounds(out)
 	var sawForeign, sawPlane bool

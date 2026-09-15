@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nemke/nagare-go/internal/attempts"
 	"github.com/nemke/nagare-go/internal/tickets"
 )
 
@@ -123,5 +124,60 @@ func TestSubmitTicketRequiresSummary(t *testing.T) {
 	result := submitTicket(store, "agent", SubmitTicketInput{TicketID: "missing", Summary: "  "})
 	if result != "Error: submission summary is required" {
 		t.Fatalf("submitTicket() = %q", result)
+	}
+}
+
+func TestSubmitTicketRecordsAttemptProvenance(t *testing.T) {
+	ticketStore := tickets.NewStore(t.TempDir())
+	attemptStore := attempts.NewStore(t.TempDir())
+	repo := t.TempDir()
+	ticket, err := ticketStore.Create(tickets.CreateInput{
+		Title: "Managed work", ProjectPath: repo, TargetBranch: "main",
+		Status: tickets.StatusRunning, Priority: tickets.PriorityMedium,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := attemptStore.Create(attempts.CreateInput{
+		TicketID: ticket.ID, Agent: "codex", ProjectPath: repo, TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attemptStore.Update(attempt.ID, func(current *attempts.Attempt) error {
+		current.State = attempts.StateRunning
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ticketStore.Update(ticket.ID, func(current *tickets.Ticket) error {
+		current.ActiveAttemptID = attempt.ID
+		current.AssigneeSession = "repo/attempt"
+		current.AssigneeAgent = "codex"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := submitTicketWithAttempts(ticketStore, attemptStore, "repo/attempt", SubmitTicketInput{
+		TicketID: ticket.ID,
+		Summary:  "Implemented and verified isolation.",
+	})
+	if strings.HasPrefix(result, "Error:") {
+		t.Fatal(result)
+	}
+	updatedTicket, err := ticketStore.Get(ticket.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedTicket.Status != tickets.StatusReview || updatedTicket.SubmittedAttemptID != attempt.ID {
+		t.Fatalf("submitted ticket = %#v", updatedTicket)
+	}
+	updatedAttempt, err := attemptStore.Get(attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedAttempt.State != attempts.StateSubmitted || updatedAttempt.SubmittedAt == nil {
+		t.Fatalf("submitted attempt = %#v", updatedAttempt)
 	}
 }

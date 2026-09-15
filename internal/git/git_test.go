@@ -297,3 +297,115 @@ func TestRemoveWorktreeLocked(t *testing.T) {
 		t.Error("locked worktree still exists after removal")
 	}
 }
+
+func TestManagedWorktreeUsesExplicitBaseWithoutTouchingSourceCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "app")
+	initRepo(t, repoDir)
+	gitRun(t, repoDir, "branch", "main")
+
+	if err := os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("dev"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repoDir, "commit", "-qam", "dev change")
+	if err := os.WriteFile(filepath.Join(repoDir, "dirty.txt"), []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	base, err := ResolveBaseCommit(repoDir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := filepath.Join(root, "managed", "app")
+	if err := AddManagedWorktree(repoDir, worktreePath, "nagare/ticket-attempt", base); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := Describe(repoDir).Branch; got != "dev" {
+		t.Errorf("source branch = %q, want dev", got)
+	}
+	if data, err := os.ReadFile(filepath.Join(repoDir, "dirty.txt")); err != nil || string(data) != "keep me" {
+		t.Fatalf("source dirty file changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(worktreePath, "f.txt")); err != nil || string(data) != "x" {
+		t.Fatalf("managed worktree did not use main base: %q, %v", data, err)
+	}
+	if got := Describe(worktreePath).Branch; got != "nagare/ticket-attempt" {
+		t.Errorf("managed branch = %q", got)
+	}
+}
+
+func TestReviewAndPushManagedBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "app")
+	initRepo(t, repoDir)
+	base, err := ResolveBaseCommit(repoDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := filepath.Join(root, "managed", "app")
+	branch := "nagare/review-test"
+	if err := AddManagedWorktree(repoDir, worktreePath, branch, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreePath, "f.txt"), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, worktreePath, "commit", "-qam", "change")
+
+	review, err := ReviewWorktree(worktreePath, branch, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.DirtyFiles != 0 || review.Commits != 1 || !strings.Contains(review.Stat, "f.txt") || !strings.Contains(review.Diff, "+changed") {
+		t.Fatalf("review = %#v", review)
+	}
+
+	remote := filepath.Join(root, "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, remote, "init", "-q", "--bare")
+	gitRun(t, repoDir, "remote", "add", "origin", remote)
+	if err := PushBranch(worktreePath, branch); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "--git-dir", remote, "show-ref", "--verify", "refs/heads/"+branch).Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		t.Fatalf("remote branch missing: %q, %v", out, err)
+	}
+	if err := PushBranch(worktreePath, "nagare/other"); err == nil {
+		t.Fatal("PushBranch accepted a branch other than the checked-out recorded branch")
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("wip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := PushBranch(worktreePath, branch); err == nil {
+		t.Fatal("PushBranch accepted dirty worktree")
+	}
+}
+
+func TestPullRequestBaseNormalizesOnlyOriginAndLocalRefs(t *testing.T) {
+	for input, want := range map[string]string{
+		"main":                     "main",
+		"release/v2":               "release/v2",
+		"origin/main":              "main",
+		"refs/heads/main":          "main",
+		"refs/remotes/origin/main": "main",
+	} {
+		got, err := PullRequestBase(input)
+		if err != nil || got != want {
+			t.Errorf("PullRequestBase(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	if _, err := PullRequestBase("refs/remotes/upstream/main"); err == nil {
+		t.Fatal("non-origin remote ref accepted as GitHub base")
+	}
+}

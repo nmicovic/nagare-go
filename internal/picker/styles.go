@@ -226,92 +226,10 @@ func surfaceBg() color.Color {
 	return theme.Current().Colors.Surface
 }
 
-// onPlane re-asserts bg for every cell of content that would otherwise fall
-// back to the terminal's own background.
-//
-// Two things leave such cells behind. A style that sets only a foreground ends
-// its run with a full SGR reset, which clears the background for everything
-// after it on that line — the reason the row and group-header renderers below
-// carry their tint per segment instead of wrapping the finished string. And
-// captured pane output is foreign ANSI: it resets whenever it likes and knows
-// nothing about the panel it is being drawn into.
-//
-// Both were invisible for as long as every panel shared the terminal's
-// background. They stopped being invisible the moment panels were lifted onto
-// their own plane, because each gap became a hole punched straight through the
-// panel with the terminal showing through it.
-//
-// Wrapping content in an outer Background style cannot fix this — that is the
-// bug, not the cure. The background has to be re-established after each reset.
-func onPlane(content string, bg color.Color) string {
-	if content == "" {
-		return content
-	}
-	set := bgSeq(bg)
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		lines[i] = set + reassertBg(line, set)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// fgSeq is the SGR sequence that sets c as the foreground. Same rationale as
-// bgSeq: used where a per-cell or per-run colour makes Style.Render too costly.
+// fgSeq emits a truecolor foreground sequence without allocating a style.
 func fgSeq(c color.Color) string {
 	r, g, b, _ := c.RGBA()
 	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
-}
-
-// bgSeq is the SGR sequence that sets bg as the background. Truecolor is
-// emitted unconditionally, exactly as every lipgloss style in nagare already
-// does; Bubble Tea's renderer downsamples for the terminal's actual profile.
-func bgSeq(bg color.Color) string {
-	r, g, b, _ := bg.RGBA()
-	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
-}
-
-// reassertBg re-emits set after every SGR sequence in line that drops the
-// background, so no printable cell is left on the terminal's default.
-func reassertBg(line, set string) string {
-	var b strings.Builder
-	b.Grow(len(line) + len(set))
-
-	for i := 0; i < len(line); {
-		if seq, n := scanSGR(line[i:]); n > 0 {
-			b.WriteString(seq)
-			i += n
-			// Nothing follows on this line, so there is no cell left to fix and
-			// re-asserting would only cost bytes on every single line.
-			if i < len(line) && clearsBackground(seq) {
-				b.WriteString(set)
-			}
-			continue
-		}
-		b.WriteByte(line[i])
-		i++
-	}
-	return b.String()
-}
-
-// scanSGR matches a leading SGR ("CSI ... m") sequence, returning it and its
-// byte length. Only SGR is of interest: it is the only sequence that changes
-// the background.
-func scanSGR(s string) (string, int) {
-	if !strings.HasPrefix(s, "\x1b[") {
-		return "", 0
-	}
-	for i := 2; i < len(s); i++ {
-		c := s[i]
-		if c == 'm' {
-			return s[:i+1], i + 1
-		}
-		// Parameter bytes only; anything else means this is some other
-		// sequence (a cursor move, an OSC 8 hyperlink) that we leave alone.
-		if (c < '0' || c > '9') && c != ';' && c != ':' {
-			return "", 0
-		}
-	}
-	return "", 0
 }
 
 // clearsBackground reports whether an SGR sequence leaves the background unset:

@@ -14,7 +14,6 @@ func textResult(s string) (*mcp.CallToolResult, any, error) {
 
 // RunServer starts the MCP server on stdio transport.
 func RunServer() error {
-	mySession := resolveMySession()
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "nagare",
@@ -23,37 +22,37 @@ func RunServer() error {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_agents",
-		Description: "List all active AI agent sessions with their status",
+		Description: "List all active AI agent sessions with their status and unread-message count",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {
-		return textResult(ListAgentsHandler(mySession))
+		return textResult(ListAgentsHandler(resolveMySession()))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "send_message",
 		Description: "Send a message to another agent session. The target must be idle. This is for informational messages that don't require a reply.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SendMessageInput) (*mcp.CallToolResult, any, error) {
-		return textResult(SendMessageHandler(mySession, input))
+		return textResult(SendMessageHandler(resolveMySession(), input))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "send_message_and_wait",
-		Description: "Send a message to another agent session and wait for a reply. The target must be idle. Use this when you need a response from the other agent.",
+		Description: "Persist a message for an idle agent, notify its pane, and wait for a reply. Returns after 30 seconds if the target does not acknowledge reading it; after acknowledgment, waits up to timeout for the reply.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SendMessageAndWaitInput) (*mcp.CallToolResult, any, error) {
-		return textResult(SendMessageAndWaitHandler(ctx, mySession, input))
+		return textResult(SendMessageAndWaitHandler(ctx, resolveMySession(), input))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "check_messages",
-		Description: "Check for incoming messages from other agents and responses to your messages. Call this periodically to see if you have new messages to respond to.",
+		Description: "Check incoming messages, outgoing delivery/read state, and replies. Incoming reads durably acknowledge delivery.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {
-		return textResult(CheckMessagesHandler(mySession))
+		return textResult(CheckMessagesHandler(resolveMySession()))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "reply",
 		Description: "Reply to a message you received. Use check_messages() to see your pending messages and their IDs.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReplyInput) (*mcp.CallToolResult, any, error) {
-		return textResult(ReplyHandler(mySession, input))
+		return textResult(ReplyHandler(resolveMySession(), input))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -74,7 +73,7 @@ func RunServer() error {
 		Name:        "submit_ticket",
 		Description: "Submit an assigned running ticket for human review. The summary must describe the completed work and verification; Nagare records the agent, session, repository, and submission time.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SubmitTicketInput) (*mcp.CallToolResult, any, error) {
-		return textResult(SubmitTicketHandler(mySession, input))
+		return textResult(SubmitTicketHandler(resolveMySession(), input))
 	})
 
 	return server.Run(context.Background(), &mcp.StdioTransport{})

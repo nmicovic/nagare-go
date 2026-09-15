@@ -192,10 +192,7 @@ func installCodexHooks(home, nagareBin string) error {
 	if hooksMap == nil {
 		hooksMap = make(map[string]interface{})
 	}
-	for event := range hooksMap {
-		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare-go hook-state")
-		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare hook-state")
-	}
+	pruneNagareHooks(hooksMap)
 	for _, event := range codexHookEvents {
 		timeout := 5
 		if event == "SessionEnd" {
@@ -309,12 +306,8 @@ func installClaudeHooks(home, nagareBin string) error {
 		hooksMap = make(map[string]interface{})
 	}
 
-	// Remove stale nagare hooks from all events
-	for event := range hooksMap {
-		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare-go hook-state")
-		// Also remove old Python nagare hooks
-		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare hook-state")
-	}
+	// Remove stale nagare hooks from all events, including old Python ones.
+	pruneNagareHooks(hooksMap)
 
 	// Hook command entry
 	hookEntry := map[string]interface{}{
@@ -385,10 +378,7 @@ func installGeminiHooks(home, nagareBin string) error {
 	}
 
 	// Remove stale nagare hooks
-	for event := range hooksMap {
-		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare-go hook-state")
-		hooksMap[event] = removeNagareHooks(hooksMap[event], "nagare hook-state")
-	}
+	pruneNagareHooks(hooksMap)
 
 	hookEntry := map[string]interface{}{
 		"name":    "nagare",
@@ -434,6 +424,40 @@ func loadJSON(path string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("invalid JSON in %s: %w", path, err)
 	}
 	return result, nil
+}
+
+// pruneNagareHooks strips nagare's own entries — current and old Python ones —
+// from every event in hooksMap, deleting an event that keeps nothing rather
+// than leaving it behind empty.
+//
+// Deleting is the whole point. An event filtered down to nothing leaves a nil
+// slice, which marshals as `null`, and Codex rejects an entire hooks.json over
+// a single null ("invalid type: null, expected a sequence") — silently dropping
+// every hook in the file, so nothing in it reports status again. That is not
+// hypothetical: dropping PreToolUse from codexHookEvents left exactly that null
+// behind on the next setup run, because nothing repopulated the key.
+//
+// A value shaped in a way nagare does not recognise is left untouched: it was
+// not nagare's to write, so it is not nagare's to delete.
+func pruneNagareHooks(hooksMap map[string]interface{}) {
+	for event, val := range hooksMap {
+		val = removeNagareHooks(val, "nagare-go hook-state")
+		val = removeNagareHooks(val, "nagare hook-state")
+
+		switch kept := val.(type) {
+		case nil:
+			// Also repairs a `null` an earlier setup run left behind.
+			delete(hooksMap, event)
+		case []interface{}:
+			if len(kept) == 0 {
+				delete(hooksMap, event)
+				continue
+			}
+			hooksMap[event] = kept
+		default:
+			hooksMap[event] = val
+		}
+	}
 }
 
 // removeNagareHooks filters out matching command handlers while preserving

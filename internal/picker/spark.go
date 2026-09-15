@@ -145,7 +145,7 @@ func sparklineOn(levels []uint8, width int, bg color.Color) string {
 	if bg == nil {
 		return sparkline(levels, width)
 	}
-	return onPlane(sparkline(levels, width), bg)
+	return theme.OnPlane(sparkline(levels, width), bg)
 }
 
 // sparkWidth is how many cells to spend on a trace, given the room available. It

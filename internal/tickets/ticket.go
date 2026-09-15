@@ -40,17 +40,22 @@ type Ticket struct {
 	Title              string     `json:"title"`
 	Description        string     `json:"description,omitempty"`
 	ProjectPath        string     `json:"project_path,omitempty"`
+	TargetBranch       string     `json:"target_branch,omitempty"`
 	Status             Status     `json:"status"`
 	Priority           Priority   `json:"priority"`
 	PlannedFor         string     `json:"planned_for,omitempty"`
 	AssigneeSession    string     `json:"assignee_session,omitempty"`
 	AssigneePaneID     string     `json:"assignee_pane_id,omitempty"`
 	AssigneeAgent      string     `json:"assignee_agent,omitempty"`
+	ActiveAttemptID    string     `json:"active_attempt_id,omitempty"`
 	SubmittedSummary   string     `json:"submitted_summary,omitempty"`
 	SubmittedBySession string     `json:"submitted_by_session,omitempty"`
 	SubmittedByAgent   string     `json:"submitted_by_agent,omitempty"`
+	SubmittedAttemptID string     `json:"submitted_attempt_id,omitempty"`
 	SubmittedRepoPath  string     `json:"submitted_repo_path,omitempty"`
 	SubmittedAt        *time.Time `json:"submitted_at,omitempty"`
+	PullRequestURL     string     `json:"pull_request_url,omitempty"`
+	PullRequestNumber  int        `json:"pull_request_number,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 	CompletedAt        *time.Time `json:"completed_at,omitempty"`
@@ -63,6 +68,7 @@ func (t *Ticket) RecordSubmission(summary string, submittedAt time.Time) {
 	t.SubmittedSummary = strings.TrimSpace(summary)
 	t.SubmittedBySession = t.AssigneeSession
 	t.SubmittedByAgent = t.AssigneeAgent
+	t.SubmittedAttemptID = t.ActiveAttemptID
 	t.SubmittedRepoPath = t.ProjectPath
 	t.SubmittedAt = &at
 }
@@ -73,8 +79,11 @@ func (t *Ticket) ClearSubmission() {
 	t.SubmittedSummary = ""
 	t.SubmittedBySession = ""
 	t.SubmittedByAgent = ""
+	t.SubmittedAttemptID = ""
 	t.SubmittedRepoPath = ""
 	t.SubmittedAt = nil
+	t.PullRequestURL = ""
+	t.PullRequestNumber = 0
 }
 
 func (t *Ticket) hydrateSubmission() {
@@ -87,6 +96,9 @@ func (t *Ticket) hydrateSubmission() {
 	if t.SubmittedByAgent == "" {
 		t.SubmittedByAgent = t.AssigneeAgent
 	}
+	if t.SubmittedAttemptID == "" {
+		t.SubmittedAttemptID = t.ActiveAttemptID
+	}
 	if t.SubmittedRepoPath == "" {
 		t.SubmittedRepoPath = t.ProjectPath
 	}
@@ -98,12 +110,13 @@ func (t *Ticket) hydrateSubmission() {
 
 // CreateInput contains user-controlled fields for a new ticket.
 type CreateInput struct {
-	Title       string
-	Description string
-	ProjectPath string
-	Status      Status
-	Priority    Priority
-	PlannedFor  string
+	Title        string
+	Description  string
+	ProjectPath  string
+	TargetBranch string
+	Status       Status
+	Priority     Priority
+	PlannedFor   string
 }
 
 // Valid reports whether s is a recognized workflow state.

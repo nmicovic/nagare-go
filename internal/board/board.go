@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nemke/nagare-go/internal/git"
-	"github.com/nemke/nagare-go/internal/mcp"
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/orchestrator"
 	"github.com/nemke/nagare-go/internal/session"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/theme"
@@ -46,31 +46,68 @@ type refreshMsg struct {
 	err             error
 	scannedSessions bool
 }
+type launchMsg struct {
+	sessionName string
+	err         error
+}
+type reconcileMsg struct {
+	err error
+}
+type archiveMsg struct {
+	err error
+}
+type reviewMsg struct {
+	review orchestrator.Review
+	err    error
+}
+type pullRequestMsg struct {
+	pr  orchestrator.PullRequest
+	err error
+}
 
 // Model is the ticket board Bubble Tea model.
 type Model struct {
-	store            *tickets.Store
-	tickets          []tickets.Ticket
-	sessions         []models.Session
-	column           int
-	cursors          map[tickets.Status]int
-	width            int
-	height           int
-	todayOnly        bool
-	delegateMode     bool
-	delegateSessions []models.Session
-	delegateCursor   int
-	agentsMode       bool
-	availableAgents  []models.Session
-	agentsCursor     int
-	deleteMode       bool
-	deleteTicket     tickets.Ticket
-	statusNote       string
-	statusErr        string
-	result           Result
-	manageSessions   bool
-	active           bool
-	refreshEpoch     uint64
+	store           *tickets.Store
+	tickets         []tickets.Ticket
+	sessions        []models.Session
+	column          int
+	cursors         map[tickets.Status]int
+	width           int
+	height          int
+	todayOnly       bool
+	guideMode       bool
+	guidePage       int
+	runMode         bool
+	runAgents       []models.AgentType
+	runCursor       int
+	runAgent        models.AgentType
+	modelMode       bool
+	modelInput      textinput.Model
+	launching       bool
+	agentsMode      bool
+	availableAgents []models.Session
+	agentsCursor    int
+	deleteMode      bool
+	archiveMode     bool
+	archiveTicket   tickets.Ticket
+	deleteTicket    tickets.Ticket
+	detailMode      bool
+	detailTicket    tickets.Ticket
+	detailOffset    int
+	reviewMode      bool
+	reviewLoading   bool
+	reviewTicket    tickets.Ticket
+	reviewLines     []string
+	reviewOffset    int
+	prMode          bool
+	prTicket        tickets.Ticket
+	statusNote      string
+	statusErr       string
+	result          Result
+	orchestrator    *orchestrator.Service
+	manageSessions  bool
+	active          bool
+	refreshEpoch    uint64
 }
 
 // New creates a standalone ticket board.
@@ -85,10 +122,19 @@ func New(store *tickets.Store) Model {
 // NewDeferred creates an unloaded board for embedding in another view.
 func NewDeferred(store *tickets.Store) Model {
 	return Model{
-		store:     store,
-		cursors:   make(map[tickets.Status]int),
-		todayOnly: true,
+		store:        store,
+		orchestrator: orchestrator.NewDefaultService(),
+		cursors:      make(map[tickets.Status]int),
+		todayOnly:    true,
+		modelInput:   newModelInput(),
 	}
+}
+
+func newModelInput() textinput.Model {
+	input := textinput.New()
+	input.CharLimit = 128
+	input.Prompt = ""
+	return input
 }
 
 // Activate refreshes a deferred board and starts its update ticker.
@@ -117,11 +163,17 @@ func (m Model) Init() tea.Cmd {
 	if !m.active {
 		return nil
 	}
-	refresh := m.refresh()
-	if m.manageSessions {
-		return tea.Batch(tea.RequestBackgroundColor, refresh)
+	commands := []tea.Cmd{m.refresh()}
+	if m.orchestrator != nil {
+		service, store := m.orchestrator, m.store
+		commands = append(commands, func() tea.Msg {
+			return reconcileMsg{err: service.Reconcile(store)}
+		})
 	}
-	return refresh
+	if m.manageSessions {
+		commands = append(commands, tea.RequestBackgroundColor)
+	}
+	return tea.Batch(commands...)
 }
 func tick(epoch uint64) tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{epoch: epoch} })
@@ -155,19 +207,81 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = msg.sessions
 		}
 		m.clampCursors()
+		m.syncDetail()
 		if !m.active {
 			return m, nil
 		}
 		return m, tick(m.refreshEpoch)
+	case launchMsg:
+		m.launching = false
+		if msg.err != nil {
+			m.statusErr = msg.err.Error()
+		} else {
+			m.statusNote = "started isolated agent " + msg.sessionName
+			m.column = statusIndex(tickets.StatusRunning)
+		}
+		m.reload()
+		return m, nil
+	case archiveMsg:
+		if msg.err != nil {
+			m.statusErr = msg.err.Error()
+		} else {
+			m.statusNote = "archived clean worktree; branch retained"
+		}
+		m.reload()
+		return m, nil
+	case reviewMsg:
+		m.reviewLoading = false
+		if msg.err != nil {
+			m.reviewMode = false
+			m.reviewTicket = tickets.Ticket{}
+			m.reviewLines = nil
+			m.statusErr = msg.err.Error()
+		} else {
+			m.reviewLines = formatReviewLines(m.reviewTicket, msg.review)
+			m.reviewOffset = 0
+		}
+		return m, nil
+	case pullRequestMsg:
+		if msg.err != nil {
+			m.statusErr = msg.err.Error()
+		} else {
+			m.statusNote = fmt.Sprintf("created pull request #%d  %s", msg.pr.Number, msg.pr.URL)
+		}
+		m.reload()
+		return m, nil
+	case reconcileMsg:
+		if msg.err != nil {
+			m.statusErr = msg.err.Error()
+		}
+		return m, nil
 	case tea.KeyMsg:
+		if m.guideMode {
+			return m.handleGuideKey(msg.String()), nil
+		}
+		if m.reviewMode {
+			return m.handleReviewKey(msg)
+		}
+		if m.prMode {
+			return m.handlePullRequestKey(msg)
+		}
 		if m.deleteMode {
 			return m.handleDeleteKey(msg)
 		}
-		if m.delegateMode {
-			return m.handleDelegateKey(msg)
+		if m.archiveMode {
+			return m.handleArchiveKey(msg)
+		}
+		if m.modelMode {
+			return m.handleModelKey(msg)
+		}
+		if m.runMode {
+			return m.handleRunKey(msg)
 		}
 		if m.agentsMode {
 			return m.handleAgentsKey(msg)
+		}
+		if m.detailMode {
+			return m.handleDetailKey(msg)
 		}
 		return m.handleKey(msg)
 	}
@@ -220,20 +334,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveSelected(-1)
 	case "]":
 		m.moveSelected(1)
+	case "c":
+		m.startArchive()
 	case "x":
 		m.startDelete()
 	case "d":
-		m.startDelegation()
+		return m.startRun()
 	case "a":
 		m.showAvailableAgents()
+	case "v":
+		return m.startReview()
+	case "p":
+		m.startPullRequest()
+	case "?":
+		m.guideMode = true
+		m.guidePage = 0
 	case "enter":
-		if ticket, ok := m.selectedTicket(); ok && ticket.AssigneeSession != "" {
-			if assigned, found := m.assignedSession(ticket); found {
-				session.SwitchToPane(assigned)
-				return m, tea.Quit
-			}
-			m.statusErr = "assigned agent is no longer running"
-		}
+		m.startDetail()
 	}
 	return m, nil
 }
@@ -248,25 +365,159 @@ func (m Model) handleDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-
-func (m Model) handleDelegateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleArchiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q":
-		m.delegateMode = false
-		m.delegateSessions = nil
-		m.delegateCursor = 0
-	case "up", "k":
-		if m.delegateCursor > 0 {
-			m.delegateCursor--
+	case "y", "enter":
+		service := m.orchestrator
+		if service == nil {
+			service = orchestrator.NewDefaultService()
 		}
-	case "down", "j":
-		if m.delegateCursor < len(m.delegateSessions)-1 {
-			m.delegateCursor++
+		store, ticketID := m.store, m.archiveTicket.ID
+		m.archiveMode = false
+		m.archiveTicket = tickets.Ticket{}
+		m.statusNote = "checking managed worktree..."
+		return m, func() tea.Msg {
+			return archiveMsg{err: service.Archive(store, ticketID)}
 		}
-	case "enter":
-		m.delegateSelected()
+	case "n", "esc", "q", "c":
+		m.archiveMode = false
+		m.archiveTicket = tickets.Ticket{}
 	}
 	return m, nil
+}
+func (m Model) handleReviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	page := m.reviewViewportHeight()
+	maxOffset := max(0, len(m.reviewLines)-page)
+	switch msg.String() {
+	case "esc", "q", "v":
+		m.reviewMode = false
+		m.reviewLoading = false
+		m.reviewTicket = tickets.Ticket{}
+		m.reviewLines = nil
+		m.reviewOffset = 0
+	case "up", "k":
+		m.reviewOffset = max(0, m.reviewOffset-1)
+	case "down", "j":
+		m.reviewOffset = min(maxOffset, m.reviewOffset+1)
+	case "pgup", "ctrl+u":
+		m.reviewOffset = max(0, m.reviewOffset-page)
+	case "pgdown", "ctrl+d":
+		m.reviewOffset = min(maxOffset, m.reviewOffset+page)
+	case "home", "g":
+		m.reviewOffset = 0
+	case "end", "G":
+		m.reviewOffset = maxOffset
+	}
+	return m, nil
+}
+
+func (m Model) handlePullRequestKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "enter":
+		service := m.orchestrator
+		if service == nil {
+			service = orchestrator.NewDefaultService()
+		}
+		store, ticketID := m.store, m.prTicket.ID
+		m.prMode = false
+		m.prTicket = tickets.Ticket{}
+		m.statusNote = "checking and pushing recorded branch..."
+		return m, func() tea.Msg {
+			pr, err := service.CreatePullRequest(store, ticketID)
+			return pullRequestMsg{pr: pr, err: err}
+		}
+	case "n", "esc", "q", "p":
+		m.prMode = false
+		m.prTicket = tickets.Ticket{}
+	}
+	return m, nil
+}
+
+func (m Model) handleRunKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.runMode = false
+		m.runAgents = nil
+		m.runCursor = 0
+		m.runAgent = models.AgentUnknown
+		m.modelInput = newModelInput()
+	case "up", "k":
+		if m.runCursor > 0 {
+			m.runCursor--
+		}
+	case "down", "j":
+		if m.runCursor < len(m.runAgents)-1 {
+			m.runCursor++
+		}
+	case "enter":
+		if m.runCursor < 0 || m.runCursor >= len(m.runAgents) {
+			return m, nil
+		}
+		agent := m.runAgents[m.runCursor]
+		if session.SupportsModelSelection(string(agent)) {
+			m.runAgent = agent
+			m.runMode = false
+			m.modelMode = true
+			m.modelInput.SetValue("")
+			return m, m.modelInput.Focus()
+		}
+		return m.launchRun(agent, "")
+	}
+	return m, nil
+}
+
+func (m Model) handleModelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.modelMode = false
+		m.modelInput.Blur()
+		m.statusErr = ""
+		m.modelInput.SetValue("")
+		m.runMode = true
+		return m, nil
+	case "enter":
+		model := strings.TrimSpace(m.modelInput.Value())
+		if err := session.ValidateModelSelection(string(m.runAgent), model); err != nil {
+			m.statusErr = err.Error()
+			return m, nil
+		}
+		return m.launchRun(m.runAgent, model)
+	default:
+		m.statusErr = ""
+		var command tea.Cmd
+		m.modelInput, command = m.modelInput.Update(msg)
+		return m, command
+	}
+}
+
+func (m Model) launchRun(agent models.AgentType, model string) (tea.Model, tea.Cmd) {
+	ticket, ok := m.selectedTicket()
+	if !ok {
+		m.runMode = false
+		m.modelMode = false
+		return m, nil
+	}
+	service := m.orchestrator
+	if service == nil {
+		service = orchestrator.NewDefaultService()
+		m.orchestrator = service
+	}
+	spec := session.AgentSpec{Agent: string(agent), Model: strings.TrimSpace(model)}
+	store := m.store
+	m.runMode = false
+	m.runAgents = nil
+	m.runCursor = 0
+	m.runAgent = models.AgentUnknown
+	m.modelMode = false
+	m.modelInput.Blur()
+	m.modelInput.SetValue("")
+	m.closeDetail()
+	m.launching = true
+	m.statusNote = "provisioning isolated worktree..."
+	return m, func() tea.Msg {
+		attempt, err := service.Start(store, ticket.ID, spec)
+		return launchMsg{sessionName: attempt.SessionName, err: err}
+	}
 }
 
 func (m Model) handleAgentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -323,6 +574,7 @@ func (m *Model) reload() {
 		m.sessions = scanAgentSessions()
 	}
 	m.clampCursors()
+	m.syncDetail()
 }
 
 func scanAgentSessions() []models.Session {
@@ -415,8 +667,109 @@ func (m *Model) startDelete() {
 	if !ok {
 		return
 	}
+	if ticket.ActiveAttemptID != "" {
+		m.statusErr = "archive the managed attempt before deleting this ticket"
+		return
+	}
 	m.deleteMode = true
 	m.deleteTicket = ticket
+}
+func (m *Model) startArchive() {
+	ticket, ok := m.selectedTicket()
+	if !ok {
+		return
+	}
+	if ticket.Status != tickets.StatusDone {
+		m.statusErr = "only done tickets can be archived"
+		return
+	}
+	if ticket.ActiveAttemptID == "" {
+		m.statusErr = "ticket has no managed attempt"
+		return
+	}
+	m.archiveMode = true
+	m.archiveTicket = ticket
+}
+func (m Model) startReview() (tea.Model, tea.Cmd) {
+	ticket, ok := m.selectedTicket()
+	if !ok {
+		return m, nil
+	}
+	if ticket.Status != tickets.StatusReview {
+		m.statusErr = "only review tickets have a submitted diff"
+		return m, nil
+	}
+	if ticket.ActiveAttemptID == "" {
+		m.statusErr = "ticket has no managed attempt"
+		return m, nil
+	}
+	service := m.orchestrator
+	if service == nil {
+		service = orchestrator.NewDefaultService()
+		m.orchestrator = service
+	}
+	m.reviewMode = true
+	m.reviewLoading = true
+	m.reviewTicket = ticket
+	m.reviewLines = nil
+	m.reviewOffset = 0
+	store := m.store
+	return m, func() tea.Msg {
+		review, err := service.Review(store, ticket.ID)
+		return reviewMsg{review: review, err: err}
+	}
+}
+
+func (m *Model) startPullRequest() {
+	ticket, ok := m.selectedTicket()
+	if !ok {
+		return
+	}
+	if ticket.Status != tickets.StatusReview {
+		m.statusErr = "only review tickets can create a pull request"
+		return
+	}
+	if ticket.ActiveAttemptID == "" {
+		m.statusErr = "ticket has no managed attempt"
+		return
+	}
+	if ticket.PullRequestURL != "" {
+		m.statusNote = fmt.Sprintf("pull request #%d  %s", ticket.PullRequestNumber, ticket.PullRequestURL)
+		return
+	}
+	m.prMode = true
+	m.prTicket = ticket
+}
+
+func (m Model) reviewViewportHeight() int {
+	return max(1, m.height-14)
+}
+
+func formatReviewLines(ticket tickets.Ticket, review orchestrator.Review) []string {
+	lines := []string{
+		ticket.Title,
+		fmt.Sprintf("Branch: %s  →  %s", review.Attempt.Branch, review.Attempt.TargetBranch),
+		fmt.Sprintf("Base: %s", review.Attempt.BaseCommit),
+		fmt.Sprintf("Commits: %d  Uncommitted files: %d", review.Git.Commits, review.Git.DirtyFiles),
+	}
+	if review.Attempt.PullRequestURL != "" {
+		lines = append(lines, fmt.Sprintf("PR #%d: %s", review.Attempt.PullRequestNumber, review.Attempt.PullRequestURL))
+	}
+	lines = append(lines, "", "STAT")
+	stat := strings.TrimSpace(ansi.Strip(review.Git.Stat))
+	if stat == "" {
+		lines = append(lines, "No tracked changes.")
+	} else {
+		lines = append(lines, strings.Split(stat, "\n")...)
+	}
+	lines = append(lines, "", "DIFF")
+	diff := strings.TrimSpace(ansi.Strip(review.Git.Diff))
+	if diff == "" {
+		lines = append(lines, "No tracked diff.")
+	} else {
+		lines = append(lines, strings.Split(diff, "\n")...)
+	}
+	return lines
 }
 
 func (m *Model) confirmDelete() {
@@ -437,30 +790,38 @@ func (m *Model) confirmDelete() {
 	m.clampCursors()
 }
 
-func (m *Model) startDelegation() {
+func (m Model) startRun() (tea.Model, tea.Cmd) {
+	if m.launching {
+		m.statusErr = "a ticket attempt is already provisioning"
+		return m, nil
+	}
 	ticket, ok := m.selectedTicket()
 	if !ok {
-		return
+		return m, nil
 	}
-	projectRoot := git.MainRoot(ticket.ProjectPath)
-	for _, candidate := range m.sessions {
-		if candidate.Status != models.StatusIdle {
-			continue
-		}
-		if projectRoot != "" && git.MainRoot(candidate.Path) != projectRoot {
-			continue
-		}
-		m.delegateSessions = append(m.delegateSessions, candidate)
+	if ticket.Status != tickets.StatusBacklog && ticket.Status != tickets.StatusReady {
+		m.statusErr = "only backlog or ready tickets can start a new attempt"
+		return m, nil
 	}
-	sort.SliceStable(m.delegateSessions, func(i, j int) bool {
-		return m.delegateSessions[i].Name < m.delegateSessions[j].Name
-	})
-	if len(m.delegateSessions) == 0 {
-		m.statusErr = "no idle agent is available for this project"
-		return
+	if ticket.ProjectPath == "" {
+		m.statusErr = "ticket has no repository; press e to set one"
+		return m, nil
 	}
-	m.delegateMode = true
-	m.delegateCursor = 0
+	m.runAgent = models.AgentUnknown
+	m.modelMode = false
+	m.modelInput = newModelInput()
+	m.runAgents = []models.AgentType{
+		models.AgentClaude,
+		models.AgentCodex,
+		models.AgentOpenCode,
+		models.AgentGemini,
+		models.AgentCrush,
+		models.AgentPi,
+		models.AgentOhMyPi,
+	}
+	m.runMode = true
+	m.runCursor = 0
+	return m, nil
 }
 
 func (m *Model) showAvailableAgents() {
@@ -486,68 +847,8 @@ func idleAgents(sessions []models.Session) []models.Session {
 	return available
 }
 
-func (m *Model) delegateSelected() {
-	if m.delegateCursor < 0 || m.delegateCursor >= len(m.delegateSessions) {
-		return
-	}
-	ticket, ok := m.selectedTicket()
-	if !ok {
-		m.delegateMode = false
-		return
-	}
-	target := m.delegateSessions[m.delegateCursor]
-	if err := assignTicket(m.store, ticket, target); err != nil {
-		m.statusErr = err.Error()
-	} else {
-		m.statusNote = "delegated to " + target.Name
-	}
-	m.delegateMode = false
-	m.delegateSessions = nil
-	m.delegateCursor = 0
-	m.column = statusIndex(tickets.StatusRunning)
-	m.reload()
-}
-
-func assignTicket(store *tickets.Store, ticket tickets.Ticket, target models.Session) error {
-	previous := ticket
-	projectPath := git.MainRoot(target.Path)
-	if projectPath == "" {
-		projectPath = target.Path
-	}
-	_, err := store.Update(ticket.ID, func(current *tickets.Ticket) error {
-		current.Status = tickets.StatusRunning
-		current.PlannedFor = time.Now().Format(time.DateOnly)
-		current.ProjectPath = projectPath
-		current.AssigneeSession = target.Name
-		current.AssigneePaneID = target.PaneID
-		current.AssigneeAgent = string(target.AgentType)
-		current.ClearSubmission()
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	response := mcp.SendMessageHandler("nagare-board", mcp.SendMessageInput{
-		Target:  target.Name,
-		Message: assignmentPrompt(ticket),
-	})
-	if !strings.HasPrefix(response, "Error") {
-		return nil
-	}
-	_, _ = store.Update(ticket.ID, func(current *tickets.Ticket) error {
-		*current = previous
-		return nil
-	})
-	return fmt.Errorf("%s", response)
-}
-
 func assignmentPrompt(ticket tickets.Ticket) string {
-	var description string
-	if ticket.Description != "" {
-		description = "\n\nDescription and acceptance criteria:\n" + ticket.Description
-	}
-	return fmt.Sprintf("You have been assigned Nagare ticket %s: %s%s\n\nWork in the current project. When the requested outcome is implemented and verified, call submit_ticket with ticket_id %q. The summary must explain what changed and how it was verified; Nagare records your agent, session, repository, and submission time automatically. Do not mark the ticket done; it requires human review.", ticket.ID, ticket.Title, description, ticket.ID)
+	return orchestrator.AssignmentPrompt(ticket)
 }
 
 func statusIndex(status tickets.Status) int {
@@ -597,14 +898,32 @@ func (m Model) view() string {
 		footer = lipgloss.NewStyle().Foreground(colors.Success).Bold(true).
 			Render(ansi.Truncate("✓  "+m.statusNote, m.width, ""))
 	}
-	if m.delegateMode {
-		columns = m.renderDelegateDialog()
+	if m.detailMode {
+		columns = m.renderDetailDialog()
+	}
+	if m.runMode {
+		columns = m.renderRunDialog()
+	}
+	if m.modelMode {
+		columns = m.renderModelDialog()
 	}
 	if m.agentsMode {
 		columns = m.renderAgentsDialog("Available agents", m.availableAgents, m.agentsCursor, "j/k choose  enter open  a/esc close")
 	}
+	if m.archiveMode {
+		columns = m.renderArchiveDialog()
+	}
 	if m.deleteMode {
 		columns = m.renderDeleteDialog()
+	}
+	if m.reviewMode {
+		columns = m.renderReviewDialog()
+	}
+	if m.prMode {
+		columns = m.renderPullRequestDialog()
+	}
+	if m.guideMode {
+		columns = m.renderGuideDialog()
 	}
 	return lipgloss.NewStyle().
 		Background(colors.Background).
@@ -648,13 +967,18 @@ func (m Model) renderFooter() string {
 	}
 	hints := []string{
 		key("Tab/⇧Tab", "views"),
+		key("?", "guide"),
 		key("h/l", "lane"),
 		key("1-5", "jump"),
 		key("j/k", "card"),
+		key("enter", "open"),
 		key("[/]", "move"),
 		key("n", "new"),
 		key("x", "delete"),
-		key("d", "delegate"),
+		key("c", "archive"),
+		key("d", "run"),
+		key("v", "review"),
+		key("p", "PR"),
 		key("a", "agents"),
 		key("t", "today"),
 		key("q", "quit"),
@@ -813,6 +1137,9 @@ func (m Model) renderCard(ticket tickets.Ticket, width int, selected bool) strin
 	}
 	title := marker + ticket.Title
 	meta := "⌂ " + project + "  ·  @" + assignee
+	if ticket.PullRequestNumber > 0 {
+		meta += fmt.Sprintf("  ·  PR #%d", ticket.PullRequestNumber)
+	}
 	shortID := ticket.ID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
@@ -871,6 +1198,103 @@ func priorityLabel(priority tickets.Priority, background color.Color) string {
 	}
 }
 
+func (m Model) renderReviewDialog() string {
+	colors := theme.Current().Colors
+	outerWidth := min(120, max(20, m.width-4))
+	innerWidth := max(14, outerWidth-6)
+	title := lipgloss.NewStyle().Foreground(colors.Secondary).Bold(true).Render("Submitted diff")
+	badge := lipgloss.NewStyle().Foreground(colors.Background).Background(colors.Secondary).Bold(true).Padding(0, 1).Render("REVIEW")
+	header := title + "  " + badge
+
+	var rows []string
+	if m.reviewLoading {
+		rows = []string{lipgloss.NewStyle().Foreground(colors.Muted).Render("Loading managed attempt...")}
+	} else {
+		page := m.reviewViewportHeight()
+		end := min(len(m.reviewLines), m.reviewOffset+page)
+		for _, line := range m.reviewLines[m.reviewOffset:end] {
+			line = strings.ReplaceAll(line, "\r", "")
+			style := lipgloss.NewStyle().Foreground(colors.Foreground).Background(colors.Overlay)
+			switch {
+			case line == "STAT" || line == "DIFF":
+				style = style.Foreground(colors.Accent).Bold(true)
+			case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+				style = style.Foreground(colors.Success)
+			case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+				style = style.Foreground(colors.Error)
+			case strings.HasPrefix(line, "@@"):
+				style = style.Foreground(colors.Secondary)
+			}
+			rows = append(rows, style.Render(ansi.Truncate(line, innerWidth, "…")))
+		}
+	}
+	if len(rows) == 0 {
+		rows = []string{lipgloss.NewStyle().Foreground(colors.Muted).Render("No diff output.")}
+	}
+	scroll := ""
+	if !m.reviewLoading {
+		end := min(len(m.reviewLines), m.reviewOffset+m.reviewViewportHeight())
+		scroll = fmt.Sprintf("  %d-%d / %d", min(len(m.reviewLines), m.reviewOffset+1), end, len(m.reviewLines))
+	}
+	hint := lipgloss.NewStyle().Foreground(colors.Muted).
+		Render("j/k scroll  pgup/pgdown page  g/G ends  v/esc close" + scroll)
+	body := header + "\n\n" + strings.Join(rows, "\n") + "\n\n" + hint
+	box := lipgloss.NewStyle().
+		Width(outerWidth).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colors.Secondary).
+		Padding(1, 2).
+		Render(body)
+	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) renderPullRequestDialog() string {
+	colors := theme.Current().Colors
+	outerWidth := min(min(max(48, m.width/2), 76), max(20, m.width-4))
+	innerWidth := max(16, outerWidth-6)
+	title := lipgloss.NewStyle().Foreground(colors.Warning).Bold(true).Render("Push branch and create pull request?")
+	name := lipgloss.NewStyle().Foreground(colors.Foreground).Bold(true).
+		Render(ansi.Truncate(m.prTicket.Title, innerWidth, "…"))
+	target := lipgloss.NewStyle().Foreground(colors.Accent).
+		Render("Target: " + m.prTicket.TargetBranch)
+	warning := lipgloss.NewStyle().Foreground(colors.Muted).
+		Render("Requires a clean submitted worktree. Push is non-force and limited to the recorded branch.")
+	hint := lipgloss.NewStyle().Foreground(colors.Warning).Bold(true).Render("y/enter create PR") + "  " +
+		lipgloss.NewStyle().Foreground(colors.Muted).Render("n/esc cancel")
+	body := strings.Join([]string{title, "", name, target, warning, "", hint}, "\n")
+	box := lipgloss.NewStyle().
+		Width(outerWidth).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colors.Warning).
+		Padding(1, 2).
+		Render(body)
+	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) renderArchiveDialog() string {
+	colors := theme.Current().Colors
+	outerWidth := min(min(max(44, m.width/2), 72), max(20, m.width-4))
+	innerWidth := max(16, outerWidth-6)
+	title := lipgloss.NewStyle().Foreground(colors.Accent).Bold(true).Render("Archive managed worktree?")
+	name := lipgloss.NewStyle().Foreground(colors.Foreground).Bold(true).
+		Render(ansi.Truncate(m.archiveTicket.Title, innerWidth, "…"))
+	warning := lipgloss.NewStyle().Foreground(colors.Muted).
+		Render("Only a clean worktree is removed. Its branch and commits are retained.")
+	hint := lipgloss.NewStyle().Foreground(colors.Accent).Bold(true).Render("y/enter archive") + "  " +
+		lipgloss.NewStyle().Foreground(colors.Muted).Render("n/esc cancel")
+	body := strings.Join([]string{title, "", name, warning, "", hint}, "\n")
+	box := lipgloss.NewStyle().
+		Width(outerWidth).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colors.Accent).
+		Padding(1, 2).
+		Render(body)
+	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m Model) renderDeleteDialog() string {
 	colors := theme.Current().Colors
 	outerWidth := min(min(max(40, m.width/2), 68), max(20, m.width-4))
@@ -893,8 +1317,92 @@ func (m Model) renderDeleteDialog() string {
 	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m Model) renderDelegateDialog() string {
-	return m.renderAgentsDialog("Delegate ticket", m.delegateSessions, m.delegateCursor, "j/k choose  enter delegate  esc cancel")
+func (m Model) renderRunDialog() string {
+	colors := theme.Current().Colors
+	outerWidth := min(max(40, m.width/2), 68)
+	innerWidth := max(20, outerWidth-6)
+	var body strings.Builder
+	body.WriteString(lipgloss.NewStyle().Foreground(colors.Primary).Bold(true).Render("Run isolated attempt"))
+	body.WriteString("  ")
+	body.WriteString(lipgloss.NewStyle().Foreground(colors.Background).Background(colors.Accent).Bold(true).Padding(0, 1).Render("WORKTREE"))
+	body.WriteString("\n\n")
+	for index, agent := range m.runAgents {
+		line := models.AgentLabel(agent)
+		row := lipgloss.NewStyle().Foreground(colors.Foreground).Width(innerWidth).PaddingLeft(2)
+		if index == m.runCursor {
+			line = "› " + line
+			row = lipgloss.NewStyle().
+				Foreground(colors.Primary).
+				Background(colors.SelBg).
+				Bold(true).
+				Width(innerWidth).
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForegroundBlend(colors.Accent, colors.Primary, colors.Accent).
+				Padding(0, 1)
+		}
+		body.WriteString(row.Render(ansi.Truncate(line, max(8, innerWidth-4), "…")))
+		body.WriteByte('\n')
+	}
+	body.WriteString("\n")
+	body.WriteString(lipgloss.NewStyle().Foreground(colors.Muted).Render("j/k choose  enter continue  esc cancel"))
+	box := lipgloss.NewStyle().
+		Width(outerWidth).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(colors.Primary, colors.Secondary, colors.Primary).
+		Padding(1, 2).
+		Render(body.String())
+	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) renderModelDialog() string {
+	colors := theme.Current().Colors
+	outerWidth := min(min(max(44, m.width/2), 72), max(20, m.width-4))
+	innerWidth := max(20, outerWidth-6)
+	input := m.modelInput
+	input.SetWidth(max(8, innerWidth-4))
+
+	title := lipgloss.NewStyle().Foreground(colors.Primary).Bold(true).Render("Choose model")
+	agent := lipgloss.NewStyle().
+		Foreground(colors.Background).
+		Background(colors.Accent).
+		Bold(true).
+		Padding(0, 1).
+		Render(models.AgentLabel(m.runAgent))
+	label := lipgloss.NewStyle().Foreground(colors.Foreground).Bold(true).Render("Model")
+	field := lipgloss.NewStyle().
+		Width(innerWidth).
+		Foreground(colors.Foreground).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colors.BorderFocus).
+		Padding(0, 1).
+		Render(input.View())
+	examples := lipgloss.NewStyle().Foreground(colors.Subtle).Render(modelInputHint(m.runAgent))
+	hint := lipgloss.NewStyle().Foreground(colors.Muted).
+		Render("enter run  empty uses agent default  esc back")
+	body := strings.Join([]string{title + "  " + agent, "", label, field, examples, "", hint}, "\n")
+	box := lipgloss.NewStyle().
+		Width(outerWidth).
+		Background(colors.Overlay).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(colors.Primary, colors.Secondary, colors.Primary).
+		Padding(1, 2).
+		Render(body)
+	return lipgloss.Place(m.width, max(8, m.height-4), lipgloss.Center, lipgloss.Center, box)
+}
+
+func modelInputHint(agent models.AgentType) string {
+	switch agent {
+	case models.AgentClaude:
+		return "Aliases: fable, opus, sonnet; full model IDs also work."
+	case models.AgentOpenCode, models.AgentPi:
+		return "Use a model ID or provider/model."
+	case models.AgentOhMyPi:
+		return "Use a model ID, provider/model, or fuzzy model name."
+	default:
+		return "Use the model ID accepted by this agent."
+	}
 }
 
 func (m Model) renderAgentsDialog(title string, agents []models.Session, cursor int, hint string) string {

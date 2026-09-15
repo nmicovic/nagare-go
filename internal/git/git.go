@@ -112,6 +112,152 @@ func MainRoot(dir string) string {
 	return filepath.Dir(filepath.Clean(commonDir))
 }
 
+// DefaultBranch returns the repository's best local indication of its target
+// branch without checking out or fetching anything.
+func DefaultBranch(repoRoot string) string {
+	if out, err := exec.Command("git", "-C", repoRoot, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
+		branch := strings.TrimSpace(string(out))
+		return strings.TrimPrefix(branch, "origin/")
+	}
+	for _, branch := range []string{"main", "master"} {
+		if exec.Command("git", "-C", repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil {
+			return branch
+		}
+	}
+	if out, err := exec.Command("git", "-C", repoRoot, "branch", "--show-current").Output(); err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+}
+
+// ResolveBaseCommit resolves target to an immutable commit without changing
+// any checkout. A simple branch name prefers origin's remote-tracking ref, then
+// the local branch; explicit refs and remote names are resolved as written.
+func ResolveBaseCommit(repoRoot, target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", fmt.Errorf("target branch is empty")
+	}
+	candidates := []string{target}
+	if !strings.Contains(target, "/") && !strings.HasPrefix(target, "refs/") {
+		candidates = []string{"refs/remotes/origin/" + target, "refs/heads/" + target, target}
+	}
+	for _, candidate := range candidates {
+		out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--verify", candidate+"^{commit}").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+	return "", fmt.Errorf("target branch %q does not resolve to a commit", target)
+}
+
+// AddManagedWorktree creates branch at baseCommit in the exact requested path.
+// It never reads or changes the source checkout's current branch.
+func AddManagedWorktree(repoRoot, path, branch, baseCommit string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("worktree path is empty")
+	}
+	if strings.TrimSpace(baseCommit) == "" {
+		return fmt.Errorf("base commit is empty")
+	}
+	if out, err := exec.Command("git", "check-ref-format", "--branch", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("invalid worktree branch %q: %w: %s", branch, err, strings.TrimSpace(string(out)))
+	}
+	out, err := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, path, baseCommit).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree add %s: %w: %s", branch, err, strings.TrimSpace(string(out)))
+	}
+	repo := Describe(path)
+	if !repo.IsWorktree || repo.Branch != branch || MainRoot(path) != filepath.Clean(repoRoot) {
+		return fmt.Errorf("git created an unexpected worktree at %s", path)
+	}
+	return nil
+}
+
+// Review describes the observable change from an attempt's immutable base.
+type Review struct {
+	DirtyFiles int
+	Commits    int
+	Stat       string
+	Diff       string
+}
+
+// ReviewWorktree returns the tracked diff and repository state for a managed
+// attempt. It refuses when the worktree moved to a different branch.
+func ReviewWorktree(path, branch, baseCommit string) (Review, error) {
+	if Describe(path).Branch != branch {
+		return Review{}, fmt.Errorf("worktree is not on recorded branch %q", branch)
+	}
+	status, err := gitOutput(path, "status", "--porcelain")
+	if err != nil {
+		return Review{}, err
+	}
+	commitsText, err := gitOutput(path, "rev-list", "--count", baseCommit+"..HEAD")
+	if err != nil {
+		return Review{}, err
+	}
+	commits, err := strconv.Atoi(strings.TrimSpace(commitsText))
+	if err != nil {
+		return Review{}, fmt.Errorf("parse commit count: %w", err)
+	}
+	stat, err := gitOutput(path, "diff", "--stat", baseCommit, "--")
+	if err != nil {
+		return Review{}, err
+	}
+	diff, err := gitOutput(path, "diff", "--no-ext-diff", "--no-color", baseCommit, "--")
+	if err != nil {
+		return Review{}, err
+	}
+	dirty := 0
+	for _, line := range strings.Split(strings.TrimRight(status, "\n"), "\n") {
+		if strings.TrimSpace(line) != "" {
+			dirty++
+		}
+	}
+	return Review{DirtyFiles: dirty, Commits: commits, Stat: stat, Diff: diff}, nil
+}
+
+// PushBranch pushes exactly the recorded attempt branch to origin without
+// force and without relying on the checkout's configured upstream.
+func PushBranch(path, branch string) error {
+	if Describe(path).Branch != branch {
+		return fmt.Errorf("worktree is not on recorded branch %q", branch)
+	}
+	status, err := gitOutput(path, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(status) != "" {
+		return fmt.Errorf("worktree has uncommitted changes")
+	}
+	ref := "refs/heads/" + branch
+	out, err := exec.Command("git", "-C", path, "push", "--set-upstream", "origin", ref+":"+ref).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git push %s: %w: %s", branch, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// PullRequestBase normalizes a recorded target ref to the branch name GitHub expects.
+func PullRequestBase(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	for _, prefix := range []string{"refs/remotes/origin/", "refs/heads/", "origin/"} {
+		target = strings.TrimPrefix(target, prefix)
+	}
+	if target == "" || strings.HasPrefix(target, "refs/") {
+		return "", fmt.Errorf("target %q is not a GitHub base branch", target)
+	}
+	return target, nil
+}
+
+func gitOutput(path string, args ...string) (string, error) {
+	out, err := exec.Command("git", append([]string{"-C", path}, args...)...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
 // AddWorktree creates a linked worktree named name under repoRoot, on a new
 // branch of the same name, and returns its path. An existing name fails rather
 // than silently reusing a worktree that may hold unrelated work.

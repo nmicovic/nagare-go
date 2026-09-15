@@ -149,7 +149,7 @@ func helpBar(m Model, width int) string {
 		Width(width).
 		MaxHeight(1).
 		Padding(0, 1).
-		Render(onPlane(strings.Join(parts, sep), canvasBg()))
+		Render(theme.OnPlane(strings.Join(parts, sep), canvasBg()))
 }
 
 // helpSection is a titled group of key bindings on the F1 screen.
@@ -276,5 +276,5 @@ func helpOverlay(width, height int) string {
 		// it can never exceed the frame it will be centered in.
 		MaxHeight(height-2).
 		Padding(1, 3).
-		Render(onPlane(content, c.Overlay))
+		Render(theme.OnPlane(content, c.Overlay))
 }

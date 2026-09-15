@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nemke/nagare-go/internal/attempts"
 	"github.com/nemke/nagare-go/internal/tickets"
 )
 
@@ -77,10 +78,19 @@ func GetTicketHandler(input GetTicketInput) string {
 
 // SubmitTicketHandler hands an assigned running ticket back for human review.
 func SubmitTicketHandler(mySession string, input SubmitTicketInput) string {
-	return submitTicket(tickets.NewStore(tickets.DefaultDir()), mySession, input)
+	return submitTicketWithAttempts(
+		tickets.NewStore(tickets.DefaultDir()),
+		attempts.NewStore(attempts.DefaultDir()),
+		mySession,
+		input,
+	)
 }
 
 func submitTicket(store *tickets.Store, mySession string, input SubmitTicketInput) string {
+	return submitTicketWithAttempts(store, nil, mySession, input)
+}
+
+func submitTicketWithAttempts(store *tickets.Store, attemptStore *attempts.Store, mySession string, input SubmitTicketInput) string {
 	summary := strings.TrimSpace(input.Summary)
 	if summary == "" {
 		return "Error: submission summary is required"
@@ -108,6 +118,16 @@ func submitTicket(store *tickets.Store, mySession string, input SubmitTicketInpu
 	})
 	if err != nil {
 		return "Error: " + err.Error()
+	}
+	if attemptStore != nil && updated.ActiveAttemptID != "" {
+		submittedAt := time.Now().UTC()
+		if _, err := attemptStore.Update(updated.ActiveAttemptID, func(attempt *attempts.Attempt) error {
+			attempt.State = attempts.StateSubmitted
+			attempt.SubmittedAt = &submittedAt
+			return nil
+		}); err != nil {
+			return fmt.Sprintf("Error: ticket moved to review but attempt provenance failed: %v", err)
+		}
 	}
 	return fmt.Sprintf("Ticket %s moved to review.", updated.ID)
 }

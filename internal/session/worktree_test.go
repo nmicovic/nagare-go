@@ -71,15 +71,54 @@ func TestPlanWorktreeLaunchNeverPassesTmux(t *testing.T) {
 // default branch and silently started claude.
 func TestAgentCommandLaunchesTheRequestedAgent(t *testing.T) {
 	for _, agent := range []string{"claude", "opencode", "gemini", "crush", "pi", "omp", "codex"} {
-		if got := agentCommand(agent, "/tmp", false); !strings.HasPrefix(got, agent) {
+		if got := agentCommand(agent, "", "/tmp", false); !strings.HasPrefix(got, agent) {
 			t.Errorf("agentCommand(%q) = %q, want it to launch %s", agent, got, agent)
 		}
 	}
 }
 
 func TestAgentCommandContinuesOhMyPiSession(t *testing.T) {
-	if got := agentCommand("omp", "/tmp", true); got != "omp -c" {
+	if got := agentCommand("omp", "", "/tmp", true); got != "omp -c" {
 		t.Errorf("agentCommand(omp, continue) = %q, want %q", got, "omp -c")
+	}
+}
+
+func TestAgentCommandSelectsRequestedModel(t *testing.T) {
+	tests := []struct {
+		agent string
+		model string
+		want  string
+	}{
+		{agent: "claude", model: "fable", want: "claude --model fable"},
+		{agent: "codex", model: "gpt-5.6-codex", want: "codex --model gpt-5.6-codex"},
+		{agent: "opencode", model: "anthropic/claude-opus-4-1", want: "opencode --model anthropic/claude-opus-4-1"},
+		{agent: "gemini", model: "gemini-2.5-pro", want: "gemini --model gemini-2.5-pro"},
+		{agent: "pi", model: "anthropic/claude-sonnet-4:high", want: "pi --model anthropic/claude-sonnet-4:high"},
+		{agent: "omp", model: "opus", want: "omp --model opus"},
+	}
+	for _, test := range tests {
+		if err := ValidateModelSelection(test.agent, test.model); err != nil {
+			t.Errorf("%s model validation: %v", test.agent, err)
+			continue
+		}
+		if got := agentCommand(test.agent, test.model, "/tmp", false); got != test.want {
+			t.Errorf("agentCommand(%q, %q) = %q, want %q", test.agent, test.model, got, test.want)
+		}
+	}
+}
+
+func TestModelSelectionRejectsUnsupportedAgentAndShellSyntax(t *testing.T) {
+	for _, test := range []struct {
+		agent string
+		model string
+	}{
+		{agent: "crush", model: "some-model"},
+		{agent: "claude", model: "fable; rm -rf /"},
+		{agent: "codex", model: "--profile"},
+	} {
+		if err := ValidateModelSelection(test.agent, test.model); err == nil {
+			t.Errorf("ValidateModelSelection(%q, %q) accepted an unsafe selection", test.agent, test.model)
+		}
 	}
 }
 

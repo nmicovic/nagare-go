@@ -36,7 +36,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
 - `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
-- `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
+- `internal/git` — resolves repository/worktree identity, reviews managed diffs, and pushes only an explicitly recorded clean branch
 - `internal/state` — state files + session registry + session notes
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
@@ -45,6 +45,8 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/popup` — popup notification TUI
 - `internal/session` — session creation + path resolution
 - `internal/newsession` — new session + quick prototype forms
+- `internal/attempts` — durable execution attempts (base SHA, branch, managed worktree, pane, lifecycle)
+- `internal/orchestrator` — ticket worktree provisioning, delivery, reconciliation, diff review, idempotent GitHub PR creation, and conservative archive
 - `internal/theme` — 13 themes on a derived design-token layer (see Themes), self-registering via init()
 - `internal/setup` — status reporting + MCP + slash command installation for every agent
 - `internal/mcp` — MCP server for inter-agent messaging, plus the CLI tool bridge
@@ -114,6 +116,109 @@ separates project blocks. A group takes the position of its most urgent member, 
 waiting worktree lifts its whole repo. Rows are derived per frame by
 `picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
 
+### Ticket orchestration
+
+Enter opens the selected ticket's detail overlay, which is the board's reading
+view: the card holds two lines, so a ready ticket was otherwise dispatched
+unread. The overlay shows the description, repository, target branch, dates,
+assignee with its live pane status, attempt ID, PR, and any submitted agent
+report, and Enter there runs the ticket's one implied action — start an
+isolated attempt from backlog or ready, jump to the agent pane while it runs.
+The agent picker is drawn over the overlay rather than replacing it, so
+cancelling with esc returns to the ticket. `syncDetail` re-reads the open
+ticket on every board refresh and closes the overlay if the ticket is gone,
+because the board reloads every second while an agent works.
+
+The overlay windows its body by *rendered* rows: `detailField` truncates its
+label rather than wrapping it — a wrapped label smuggles a newline into a row
+the viewport counts as one — and `detailPage` budgets against a measured empty
+box (`detailBox(nil)`), not against assumed border and padding arithmetic. The
+hint bar reserves `esc close` and the scroll counter and trims only the
+lane-specific hints.
+
+`d` on a backlog or ready ticket selects an agent, then accepts an optional
+per-session model. Blank input preserves the agent's configured default. Claude,
+Codex, OpenCode, Gemini, pi, and OhMyPi receive `--model`; Crush skips model
+selection because its CLI has no per-session model flag. The ticket must name a
+repository and target branch. Nagare resolves the target to an immutable commit
+without switching the source checkout, creates `nagare/<ticket>-<attempt>` under
+`~/.local/share/nagare/workspaces/<attempt>/<repo>`, and starts every agent —
+including Claude Code — inside that Nagare-created worktree.
+
+The agent's tmux window is named after the ticket (`windowNameFor`), so the
+picker shows `repo/new-video-compiler-template-3d7f13f1` rather than an opaque
+pair of IDs. The attempt's short ID stays as a suffix: it is the one in the
+branch name, so a pane still says which branch it is on, and two attempts on one
+ticket would otherwise share a name that messaging resolves agents by.
+
+Attempt records live independently under `~/.local/share/nagare/attempts/`.
+They retain the base commit, branch, worktree, agent, selected model, session,
+pane, errors, and submission time so retries do not overwrite provenance.
+Ticket and attempt file updates use cross-process record locks because the board
+and an agent MCP server can update the same record concurrently.
+
+Provisioning never checks out or modifies the target branch. A failure after Git
+creation deliberately leaves the branch and worktree intact. Reconciliation may
+mark a missing running worktree failed and make its ticket retryable, but never
+deletes anything.
+
+`c` archives a done ticket's worktree once its agent pane has closed. The attempt
+need not have been submitted: an agent that stops early never calls
+`submit_ticket`, and its work is then finished, merged, and marked Done by hand —
+a Done ticket is the human saying what a submitted attempt says, and it is the
+more authoritative of the two. Without this such a ticket could never be closed
+out, and removing its worktree by hand made reconciliation rewind the finished
+ticket to Ready. Only an already archived or still provisioning attempt is
+refused.
+
+Archive verifies the path is below Nagare's managed root, verifies the repository,
+and calls the existing non-force dirty-guarded removal, so uncommitted work still
+blocks it. The attempt branch and its commits are always retained. A ticket with an active managed attempt cannot be
+deleted.
+
+### Submitting text to an agent
+
+Typing into an agent TUI is not the same as submitting. Every agent debounces
+its input: a burst of literal text is treated as a paste, and an Enter arriving
+inside that window is appended to the buffer as a newline instead of submitting
+it. The 50ms gap that used to separate the two `send-keys` calls was not enough,
+and the failure is silent in the worst way — the ticket sits unsent in the
+agent's prompt while the board reports the work handed off and the agent
+running.
+
+Worse, a pane running an agent is not an agent ready to be typed at. Claude
+Code opens a directory it has not seen — which every managed worktree is — by
+asking whether the folder is trusted, and waits there **indefinitely**, running
+no hooks at all. Text typed at that dialog is discarded, and the Enter after it
+answers the highlighted default, which is *No, exit*. The old blind send
+therefore killed the agent it had just launched for the ticket, and the board
+went on showing the ticket as running. Verified against a real pane, not
+reasoned about.
+
+`tmux.SubmitPrompt` therefore does two things. It types nothing until the agent
+has reported itself through its hooks — which it cannot do while that dialog is
+up, making the hook state the exact readiness signal — waiting up to a minute,
+so answering the prompt lets delivery proceed on its own, and otherwise failing
+with a message that names the trust prompt. Then it confirms the submit rather
+than assuming it: Enter is resent — 250ms, 500ms, 1s, 2s — until the agent's own
+state file changes, which is what accepting a prompt does (`UserPromptSubmit`
+and its per-agent spellings).
+
+`Submit.NotBefore` discards state older than the launch, because a pane keeps
+the state files of every agent that has run in it and a previous occupant's
+must not read as readiness. An agent that reports no state at all, which is
+Crush (`models.ReportsStatus`), has nothing to wait for or confirm against and
+keeps a single best-effort Enter rather than guessing at another TUI's input.
+Both delivery paths use it: `mcp.sendNudge` for the mailbox notice and
+`session.SendPromptToPane` for the orchestrator's direct fallback.
+
+A stall is reported instead of swallowed, and the text is deliberately left in
+the agent's prompt so it can be submitted by hand. Because the message file is
+written before the notice is sent, `deliverWhenReady` stops retrying as soon as
+an error contains `mcp.MessagePersistedMarker`: the wait exists for a pane that
+has not registered itself yet, and resending after a save would duplicate the
+ticket in the mailbox.
+
 ## Agent Integrations
 
 Every agent reports status through one interface: `nagare-go hook-state` reading a JSON
@@ -130,7 +235,31 @@ per-agent elsewhere.
 | OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
 | pi | extension `~/.pi/agent/extensions/nagare.ts` | `nagare-go tool` bridge (pi has no MCP) |
-| Codex | hooks in `~/.codex/hooks.json` | MCP (`~/.codex/config.toml`) |
+
+### Message identity is the agent instance
+
+A message records `from_agent_id` / `to_agent_id`: the session ID the agent
+reports through its hooks, read from the pane's state file at send time.
+Matching prefers it, because neither of the weaker identities is an agent:
+
+- A **pane** outlives the agent that ran in it. Keying outgoing state on the
+  pane handed the next occupant the previous agent's outbox and every reply to
+  it — observed in the wild across two unrelated repositories, delivered
+  silently, with an action item for a checkout the receiver did not have.
+- A **display name** is reused across repositories and months, and it
+  legitimately changes for one agent as panes are added or a window is renamed.
+
+The old filter *substituted* the pane check for the name check, so it was wrong
+in both directions: a new occupant inherited another agent's messages, and an
+agent whose pane was renumbered (a tmux server restart renumbers from `%0`)
+silently lost its own. Identity now degrades rather than substitutes:
+`Message.sentBy` / `addressedTo` take the agent ID when both sides have one,
+else the pane *plus* the display-name root, else the name. The root is the tmux
+session, which names the repository; only the suffix moves during a rename.
+
+Records written before agent IDs existed have only the weaker identities, so a
+name reused long enough after the fact can still match. `check_messages` caps
+responses at the ten most recent for that reason.
 
 pi has no MCP client by design, so its extension registers the five nagare tools and
 shells out to `nagare-go tool <name> <json>`, which calls the same handlers the MCP
@@ -149,6 +278,11 @@ binary rather than assumed:
   with no warning — a hook written that way silently inherits the 600s default.
 - Codex has no `Notification` or `Elicitation` event, so `PermissionRequest` is the
   only signal for a waiting prompt, and it fires once.
+- An event whose value is `null` makes Codex reject the **entire** file
+  ("invalid type: null, expected a sequence") and run none of the hooks in it.
+  So an event nagare stops installing must be *deleted* from `hooks.json`, not
+  filtered to nothing — a Go nil slice marshals as `null`. `pruneNagareHooks`
+  owns that, and it repairs a file an earlier run already broke.
 - A new or changed hook is **untrusted** and does not run until the user approves it
   in Codex's startup review (or `/hooks`). Setup says so, because hooks that look
   installed and never fire read as a nagare bug. Do not reach for
@@ -437,6 +571,9 @@ Compatible with Python version. Same paths, same JSON schema:
 - `~/.local/share/nagare/sessions.json`
 - `~/.local/share/nagare/notes.json` (session notes; kept out of sessions.json so Python nagare does not wipe the registry)
 - `~/.local/share/nagare/notifications.json`
+- `~/.local/share/nagare/tickets/*.json`
+- `~/.local/share/nagare/attempts/*.json`
+- `~/.local/share/nagare/workspaces/<attempt>/<repo>/` (managed linked worktrees, not state files)
 - `~/.local/share/nagare/messages/` (MCP inter-agent)
 - `~/.local/share/nagare/nagare-go.log`
 - `~/.config/nagare/config.toml`

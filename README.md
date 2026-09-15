@@ -17,7 +17,7 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)
 - **Inter-Agent Messaging** — MCP server lets agents discover, message, and coordinate with each other (pi has no MCP client, so it gets the same tools through a CLI bridge; OhMyPi uses native MCP)
-- **Ticket Board** — a local cross-project kanban for today's work, with durable tickets, agent delegation, human review, and submission records capturing the result, agent, session, repository, and time for reporting
+- **Ticket Orchestration** — run a ticket with any supported agent in a dedicated branch and Nagare-owned worktree, inspect its submitted diff, and safely create or recover a GitHub pull request with durable attempt provenance
 - **6 Themes** — tokyonight, catppuccin, dracula, gruvbox, monokai, nord
 - **3ms Startup** — compiled Go binary, no runtime dependencies
 
@@ -73,7 +73,7 @@ nagare-go              # open session picker (default)
 nagare-go new ~/proj   # create new session with Claude (-a codex|opencode|gemini|crush|pi|omp)
 nagare-go new ~/proj -w my-feature   # start an agent in a new named git worktree
 nagare-go new myproto  # quick prototype (creates in ~/Prototypes/)
-nagare-go board        # cross-project ticket board and agent delegation
+nagare-go board        # cross-project tickets and isolated agent attempts
 nagare-go notifs       # notification center + settings
 nagare-go setup        # install status reporting + MCP server + slash commands
 nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
@@ -83,18 +83,59 @@ nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 
 | Key | Action |
 |-----|--------|
+| `?` | Open the four-page board field guide |
 | `h/l` or arrows | Move between columns |
 | `1`–`5` | Jump directly to Backlog, Ready, Running, Review, or Done |
 | `j/k` or arrows | Select a ticket |
 | `[` / `]` | Move ticket left / right |
 | `n` | Create ticket |
 | `e` | Edit ticket |
-| `d` | Delegate to an available idle agent |
+| `d` | Run a ticket with a selected agent and optional model in an isolated worktree |
+| `v` | Inspect the submitted attempt's stats and scrollable diff |
+| `p` | Confirm a non-force push of the recorded branch and create or recover its GitHub pull request |
+| `c` | Archive a done ticket's clean worktree after its agent pane closes; retain the branch |
 | `a` | Show available agents |
 | Enter | Jump to the assigned agent |
 | `t` | Toggle Today / All |
 | Tab / Shift+Tab | Cycle list / board / grid forward or backward |
 | `q` / Esc | Quit |
+
+## Ticket Review and Pull Requests
+Press `?` from the board to open the built-in field guide. Use `h/l`, the left
+and right arrows, or `1`–`4` to move between Plan, Isolate, Review, and Finish.
+The guide explains the complete workflow without leaving Nagare.
+
+Each ticket records its repository and target branch. Press `d` on a Backlog or
+Ready ticket to select an agent, then enter a model or leave the model empty to
+use that agent's default. Agents with a per-session model option receive it when
+their process starts; Crush currently uses its configured default because its
+CLI has no per-session model flag. Nagare resolves the target to an immutable
+base commit, creates a dedicated branch and managed worktree, launches the agent
+there, and keeps the source checkout unchanged.
+Managed ticket worktrees live at
+`~/.local/share/nagare/workspaces/<attempt-id>/<repository>/`, on branches named
+`nagare/<ticket>-<attempt>`. Archiving removes only the clean managed worktree;
+the original checkout, branch, commits, pull request, and durable attempt record
+remain intact.
+
+When the agent submits the ticket through Nagare, the attempt and ticket move
+to Review. The board then supports:
+
+1. Press `v` to inspect the attempt's commit count, dirty-file count, diff
+   statistics, and scrollable unified diff from its recorded base.
+2. Commit any remaining work. Pull-request creation deliberately refuses dirty
+   worktrees and attempts with no commits beyond their base.
+3. Press `p` and confirm to push only the recorded branch to the matching
+   `origin` branch with a non-force refspec. Nagare creates a GitHub pull request
+   against the recorded target, or finds the existing pull request after a
+   retry or interrupted creation.
+4. Move the reviewed ticket to Done, close its agent pane, then press `c` to
+   remove the clean managed worktree. The branch and commits remain intact.
+
+Pull-request creation requires an authenticated
+[GitHub CLI](https://cli.github.com/) (`gh`) in `PATH` and an `origin` remote.
+Nagare persists the pull-request URL, number, state, and creation time on the
+attempt, and shows the pull-request number on the ticket card.
 
 ## Picker Keybindings
 

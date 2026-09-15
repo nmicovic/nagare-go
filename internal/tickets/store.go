@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nemke/nagare-go/internal/fsutil"
 )
 
 // Store persists each ticket independently so agent MCP processes can update
@@ -44,15 +45,16 @@ func (s *Store) Create(input CreateInput) (Ticket, error) {
 	}
 
 	ticket := Ticket{
-		ID:          uuid.NewString(),
-		Title:       strings.TrimSpace(input.Title),
-		Description: strings.TrimSpace(input.Description),
-		ProjectPath: cleanProjectPath(input.ProjectPath),
-		Status:      status,
-		Priority:    priority,
-		PlannedFor:  input.PlannedFor,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           uuid.NewString(),
+		Title:        strings.TrimSpace(input.Title),
+		Description:  strings.TrimSpace(input.Description),
+		ProjectPath:  cleanProjectPath(input.ProjectPath),
+		TargetBranch: strings.TrimSpace(input.TargetBranch),
+		Status:       status,
+		Priority:     priority,
+		PlannedFor:   input.PlannedFor,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := ticket.Validate(); err != nil {
 		return Ticket{}, err
@@ -109,7 +111,11 @@ func (s *Store) Get(id string) (Ticket, error) {
 	if err != nil {
 		return Ticket{}, err
 	}
-	data, err := os.ReadFile(s.path(resolved))
+	return s.getResolved(resolved)
+}
+
+func (s *Store) getResolved(id string) (Ticket, error) {
+	data, err := os.ReadFile(s.path(id))
 	if err != nil {
 		return Ticket{}, fmt.Errorf("read ticket %s: %w", id, err)
 	}
@@ -128,24 +134,40 @@ func (s *Store) Get(id string) (Ticket, error) {
 // replaces that ticket's file. This keeps UI-held copies from overwriting newer
 // agent updates.
 func (s *Store) Update(id string, mutate func(*Ticket) error) (Ticket, error) {
-	ticket, err := s.Get(id)
+	resolved, err := s.resolveID(id)
 	if err != nil {
 		return Ticket{}, err
 	}
-	if err := mutate(&ticket); err != nil {
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return Ticket{}, err
 	}
-	ticket.Title = strings.TrimSpace(ticket.Title)
-	ticket.Description = strings.TrimSpace(ticket.Description)
-	ticket.ProjectPath = cleanProjectPath(ticket.ProjectPath)
-	ticket.UpdatedAt = time.Now().UTC()
-	if err := ticket.Validate(); err != nil {
+	var updated Ticket
+	err = fsutil.WithFileLock(s.path(resolved)+".lock", func() error {
+		ticket, err := s.getResolved(resolved)
+		if err != nil {
+			return err
+		}
+		if err := mutate(&ticket); err != nil {
+			return err
+		}
+		ticket.Title = strings.TrimSpace(ticket.Title)
+		ticket.Description = strings.TrimSpace(ticket.Description)
+		ticket.ProjectPath = cleanProjectPath(ticket.ProjectPath)
+		ticket.TargetBranch = strings.TrimSpace(ticket.TargetBranch)
+		ticket.UpdatedAt = time.Now().UTC()
+		if err := ticket.Validate(); err != nil {
+			return err
+		}
+		if err := s.write(ticket); err != nil {
+			return err
+		}
+		updated = ticket
+		return nil
+	})
+	if err != nil {
 		return Ticket{}, err
 	}
-	if err := s.write(ticket); err != nil {
-		return Ticket{}, err
-	}
-	return ticket, nil
+	return updated, nil
 }
 
 // Delete removes the ticket resolved by a full ID or unambiguous ID prefix.
@@ -154,10 +176,12 @@ func (s *Store) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(s.path(resolved)); err != nil {
-		return fmt.Errorf("delete ticket %s: %w", id, err)
-	}
-	return nil
+	return fsutil.WithFileLock(s.path(resolved)+".lock", func() error {
+		if err := os.Remove(s.path(resolved)); err != nil {
+			return fmt.Errorf("delete ticket %s: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // SetStatus transitions a ticket and maintains completion metadata.

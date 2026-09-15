@@ -112,6 +112,13 @@ func StatusLabel(s SessionStatus) string {
 	}
 }
 
+// ReportsStatus reports whether an agent tells nagare what it is doing through
+// hooks, a plugin, or an extension. Crush is the one supported agent with no
+// such mechanism, so nothing it does can be observed or confirmed.
+func ReportsStatus(a AgentType) bool {
+	return a != AgentCrush
+}
+
 // AgentLabel returns the human-readable label for an agent type.
 func AgentLabel(a AgentType) string {
 	switch a {
